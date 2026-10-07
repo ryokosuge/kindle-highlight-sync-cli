@@ -9,11 +9,11 @@ import (
 // Kind は失敗の種類を表す。
 type Kind int
 
-// §71 の 1〜9 に対応する。値がそのまま exit code になる。
+// §71 の 1〜9 に対応する。値がそのまま exit code になる（0 success は err が nil のときの値で、Kind には持たない）。
 const (
 	General        Kind = 1
 	AmazonAuth     Kind = 2
-	Config         Kind = 3
+	ConfigRequired Kind = 3
 	Notion         Kind = 4
 	Browser        Kind = 5
 	LocalState     Kind = 6
@@ -25,7 +25,7 @@ const (
 var kindNames = map[Kind]string{
 	General:        "general error",
 	AmazonAuth:     "Amazon authentication required",
-	Config:         "configuration / confirmation required",
+	ConfigRequired: "configuration / confirmation required",
 	Notion:         "Notion error",
 	Browser:        "browser error",
 	LocalState:     "local state / ID scheme error",
@@ -55,8 +55,8 @@ func (e *Error) Unwrap() error {
 	return e.Err
 }
 
-// Wrap はエラーに失敗の種類を付与する。
-func Wrap(kind Kind, err error) error {
+// New は err を kind の種類で包む。
+func New(kind Kind, err error) error {
 	return &Error{Kind: kind, Err: err}
 }
 
@@ -76,8 +76,9 @@ func Code(err error) int {
 	return int(kindOf(err))
 }
 
-// Line は種類とエラーを改行のない一行にして返す。
-func Line(err error) string {
+// Describe は "<種類名>: <メッセージ>" を改行のない 1 行にして返す。
+// err には nil 以外を渡す。nil は呼び出し側の誤りで panic する。
+func Describe(err error) string {
 	msg := err.Error()
 	msg = strings.Join(strings.FieldsFunc(msg, func(r rune) bool {
 		return r == '\n' || r == '\r'
