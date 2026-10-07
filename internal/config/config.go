@@ -86,6 +86,9 @@ func decodeError(path string, data []byte, err error) error {
 
 	var de *toml.DecodeError
 	if errors.As(err, &de) {
+		if d, ok := duplicate(ents); ok {
+			return &loadError{msg: fmt.Sprintf("%s: duplicate key %s (line %d, column %d)", path, strings.Join(d.path, "."), d.key.Start.Line, d.key.Start.Column), err: err}
+		}
 		if len(fullKey(de, ents)) == 0 {
 			return &loadError{msg: fmt.Sprintf("%s: invalid TOML (%s)", path, position(de)), err: err}
 		}
@@ -109,6 +112,20 @@ func checkKeys(path string, data []byte) error {
 		}
 	}
 	return nil
+}
+
+// duplicate は同じ完全な path が 2 回目に現れる entry を返す。
+// inline table の中の重複では DecodeError の位置も Key() も外側の key を指すため。
+func duplicate(ents []entry) (entry, bool) {
+	seen := map[string]bool{}
+	for _, e := range ents {
+		key := strings.Join(e.path, ".")
+		if seen[key] {
+			return e, true
+		}
+		seen[key] = true
+	}
+	return entry{}, false
 }
 
 func describe(de *toml.DecodeError, ents []entry) string {

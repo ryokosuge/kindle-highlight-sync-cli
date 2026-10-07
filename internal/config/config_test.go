@@ -127,6 +127,44 @@ func TestLoadError(t *testing.T) {
 	}
 }
 
+func TestLoadErrorDuplicateKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "inline table",
+			content: "notion = { mapping = { title = \"a\", title = \"b\" } }\n",
+			want:    "duplicate key notion.mapping.title (line 1, column 37)",
+		},
+		{
+			name:    "通常の table",
+			content: "[notion.mapping]\ntitle = \"a\"\ntitle = \"b\"\n",
+			want:    "duplicate key notion.mapping.title (line 3, column 1)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, tt.content)
+
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load() error = nil, want error")
+			}
+			msg := err.Error()
+			for _, s := range []string{path, tt.want} {
+				if !strings.Contains(msg, s) {
+					t.Errorf("Load() error = %q, want it to contain %q", msg, s)
+				}
+			}
+			if strings.Contains(msg, "key notion (") {
+				t.Errorf("Load() error = %q, want it not to name only the outer key notion", msg)
+			}
+		})
+	}
+}
+
 func TestLoadErrorOmitsValue(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -142,6 +180,11 @@ func TestLoadErrorOmitsValue(t *testing.T) {
 			name:    "範囲外の浮動小数点",
 			content: "[amazon]\nregion = 1e999\n",
 			value:   "1e999",
+		},
+		{
+			name:    "inline table の重複した key",
+			content: "notion = { mapping = { title = \"ntn_first\", title = \"ntn_second\" } }\n",
+			value:   "ntn_",
 		},
 	}
 	for _, tt := range tests {
