@@ -9,24 +9,16 @@ import (
 // Kind は失敗の種類を表す。
 type Kind int
 
+// §71 の 1〜9 に対応する。値がそのまま exit code になる。
 const (
-	// General は一般的なエラーを表す。
-	General Kind = 1
-	// AmazonAuth は Amazon 認証が必要なエラーを表す。
-	AmazonAuth Kind = 2
-	// Config は設定または確認が必要なエラーを表す。
-	Config Kind = 3
-	// Notion は Notion エラーを表す。
-	Notion Kind = 4
-	// Browser はブラウザーエラーを表す。
-	Browser Kind = 5
-	// LocalState はローカル状態または ID 方式のエラーを表す。
-	LocalState Kind = 6
-	// SourceFormat はソース形式のエラーを表す。
-	SourceFormat Kind = 7
-	// PartialFailure は一部失敗を表す。
+	General        Kind = 1
+	AmazonAuth     Kind = 2
+	Config         Kind = 3
+	Notion         Kind = 4
+	Browser        Kind = 5
+	LocalState     Kind = 6
+	SourceFormat   Kind = 7
 	PartialFailure Kind = 8
-	// AlreadyRunning はすでに実行中であることを表す。
 	AlreadyRunning Kind = 9
 )
 
