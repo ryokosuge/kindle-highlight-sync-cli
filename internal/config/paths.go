@@ -37,7 +37,10 @@ func xdgBase(getenv func(string) string, key, fallback string) string {
 func DefaultPaths() (Paths, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return Paths{}, err
+		if !filepath.IsAbs(os.Getenv("XDG_CONFIG_HOME")) || !filepath.IsAbs(os.Getenv("XDG_DATA_HOME")) {
+			return Paths{}, err
+		}
+		home = ""
 	}
 	return ResolvePaths(os.Getenv, home), nil
 }

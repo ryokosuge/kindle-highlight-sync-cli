@@ -69,20 +69,68 @@ func TestDefaultPaths(t *testing.T) {
 	home := t.TempDir()
 	xdgConfig := t.TempDir()
 	xdgData := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", xdgConfig)
-	t.Setenv("XDG_DATA_HOME", xdgData)
-
-	got, err := DefaultPaths()
-	if err != nil {
-		t.Fatalf("DefaultPaths() error = %v", err)
-	}
-	want := Paths{
+	xdgPaths := Paths{
 		ConfigFile: filepath.Join(xdgConfig, appName, "config.toml"),
 		DataDir:    filepath.Join(xdgData, appName),
 	}
-	if got != want {
-		t.Errorf("DefaultPaths() = %+v, want %+v", got, want)
+
+	tests := []struct {
+		name    string
+		env     map[string]string
+		want    Paths
+		wantErr bool
+	}{
+		{
+			name: "XDG の環境変数が設定されている",
+			env: map[string]string{
+				"HOME":            home,
+				"XDG_CONFIG_HOME": xdgConfig,
+				"XDG_DATA_HOME":   xdgData,
+			},
+			want: xdgPaths,
+		},
+		{
+			name: "HOME が空で XDG の環境変数が両方とも絶対パス",
+			env: map[string]string{
+				"HOME":            "",
+				"XDG_CONFIG_HOME": xdgConfig,
+				"XDG_DATA_HOME":   xdgData,
+			},
+			want: xdgPaths,
+		},
+		{
+			name: "HOME が空で XDG_DATA_HOME が空",
+			env: map[string]string{
+				"HOME":            "",
+				"XDG_CONFIG_HOME": xdgConfig,
+				"XDG_DATA_HOME":   "",
+			},
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			for k, v := range tt.env {
+				t.Setenv(k, v)
+			}
+			got, err := DefaultPaths()
+			if tt.wantErr {
+				_, homeErr := os.UserHomeDir()
+				if homeErr == nil {
+					t.Fatalf("os.UserHomeDir() error = nil, want an error with HOME unset")
+				}
+				if err == nil || err.Error() != homeErr.Error() {
+					t.Errorf("DefaultPaths() error = %v, want %v", err, homeErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DefaultPaths() error = %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("DefaultPaths() = %+v, want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
