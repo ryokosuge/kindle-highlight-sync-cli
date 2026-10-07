@@ -86,7 +86,7 @@ func decodeError(path string, data []byte, err error) error {
 
 	var de *toml.DecodeError
 	if errors.As(err, &de) {
-		if d, ok := duplicate(ents); ok {
+		if d, ok := duplicate(de, ents); ok {
 			return &loadError{msg: fmt.Sprintf("%s: duplicate key %s (line %d, column %d)", path, strings.Join(d.path, "."), d.key.Start.Line, d.key.Start.Column), err: err}
 		}
 		if len(fullKey(de, ents)) == 0 {
@@ -114,18 +114,34 @@ func checkKeys(path string, data []byte) error {
 	return nil
 }
 
-// duplicate は同じ完全な path が 2 回目に現れる entry を返す。
+// duplicate は、DecodeError の位置の式に含まれ、同じ完全な path が 2 回目に現れる entry を返す。
 // inline table の中の重複では DecodeError の位置も Key() も外側の key を指すため。
-func duplicate(ents []entry) (entry, bool) {
+// 位置の式に含まれない重複は decoder が止まった error と無関係なので返さない。
+func duplicate(de *toml.DecodeError, ents []entry) (entry, bool) {
+	row, col := de.Position()
 	seen := map[string]bool{}
-	for _, e := range ents {
-		key := strings.Join(e.path, ".")
-		if seen[key] {
-			return e, true
+	for _, d := range ents {
+		key := strings.Join(d.path, ".")
+		if seen[key] && atError(d, ents, row, col) {
+			return d, true
 		}
 		seen[key] = true
 	}
 	return entry{}, false
+}
+
+// atError は d が (row, col) を含む entry 自身か、(row, col) を含む entry の value の中にあるかを返す。
+func atError(d entry, ents []entry, row, col int) bool {
+	at := func(e entry) bool { return contains(e.key, row, col) || contains(e.value, row, col) }
+	if at(d) {
+		return true
+	}
+	for _, e := range ents {
+		if at(e) && contains(e.value, d.key.Start.Line, d.key.Start.Column) {
+			return true
+		}
+	}
+	return false
 }
 
 func describe(de *toml.DecodeError, ents []entry) string {
@@ -190,11 +206,16 @@ func entries(data []byte) ([]entry, error) {
 func appendKeyValue(p *unstable.Parser, out []entry, prefix []string, kv *unstable.Node) []entry {
 	path, keyShape := keyParts(p, prefix, kv.Key())
 	value := kv.Value()
+	i := len(out)
 	out = append(out, entry{path: path, key: keyShape, value: p.Shape(value.Raw)})
 	if value.Kind == unstable.InlineTable {
 		children := value.Children()
 		for children.Next() {
 			out = appendKeyValue(p, out, path, children.Node())
+		}
+		// inline table の value の範囲は "{" だけなので、中の最後の entry の終わりまで広げる。
+		if len(out) > i+1 {
+			out[i].value.End = out[len(out)-1].value.End
 		}
 	}
 	return out

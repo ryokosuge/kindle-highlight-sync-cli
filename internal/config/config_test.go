@@ -132,16 +132,25 @@ func TestLoadErrorDuplicateKey(t *testing.T) {
 		name    string
 		content string
 		want    string
+		notWant string
 	}{
 		{
 			name:    "inline table",
 			content: "notion = { mapping = { title = \"a\", title = \"b\" } }\n",
 			want:    "duplicate key notion.mapping.title (line 1, column 37)",
+			notWant: "key notion (",
 		},
 		{
 			name:    "通常の table",
 			content: "[notion.mapping]\ntitle = \"a\"\ntitle = \"b\"\n",
 			want:    "duplicate key notion.mapping.title (line 3, column 1)",
+			notWant: "key notion (",
+		},
+		{
+			name:    "先の行の型違いと後の重複",
+			content: "[amazon]\nregion = 1\n\n[notion.mapping]\ntitle = \"a\"\ntitle = \"b\"\n",
+			want:    "invalid key amazon.region (line 2, column 10)",
+			notWant: "duplicate key",
 		},
 	}
 	for _, tt := range tests {
@@ -158,8 +167,8 @@ func TestLoadErrorDuplicateKey(t *testing.T) {
 					t.Errorf("Load() error = %q, want it to contain %q", msg, s)
 				}
 			}
-			if strings.Contains(msg, "key notion (") {
-				t.Errorf("Load() error = %q, want it not to name only the outer key notion", msg)
+			if strings.Contains(msg, tt.notWant) {
+				t.Errorf("Load() error = %q, want it not to contain %q", msg, tt.notWant)
 			}
 		})
 	}
