@@ -49,6 +49,7 @@ func newRootCmdWith(a *app) *cobra.Command {
 		a.paths, a.config = p, cfg
 		return nil
 	}
+	root.AddCommand(newSyncCmd(a))
 	return root
 }
 
