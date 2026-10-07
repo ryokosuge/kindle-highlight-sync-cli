@@ -100,8 +100,8 @@ func TestEnsureDataDir(t *testing.T) {
 		if !info.IsDir() {
 			t.Errorf("DataDir %q is not a directory", p.DataDir)
 		}
-		if got := info.Mode().Perm(); got != dataDirPerm {
-			t.Errorf("DataDir permission = %o, want %o", got, dataDirPerm)
+		if got := info.Mode().Perm(); got != 0o700 {
+			t.Errorf("DataDir permission = %o, want %o", got, 0o700)
 		}
 
 		parent := filepath.Dir(p.DataDir)
