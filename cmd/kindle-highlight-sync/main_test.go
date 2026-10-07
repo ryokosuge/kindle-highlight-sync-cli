@@ -11,6 +11,11 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 )
 
+const (
+	configFilePlaceholder = "{configFile}"
+	invalidTOML           = "[amazon\nregion = \"japan\"\n"
+)
+
 func TestRun(t *testing.T) {
 	tests := []struct {
 		name              string
@@ -68,6 +73,7 @@ func TestExecute(t *testing.T) {
 	tests := []struct {
 		name       string
 		args       []string
+		configTOML string
 		runE       func(*cobra.Command, []string) error
 		wantCode   int
 		wantStderr string
@@ -165,9 +171,55 @@ func TestExecute(t *testing.T) {
 			wantCode:   1,
 			wantStderr: "general error: unknown command \"fial\" for \"kindle-highlight-sync\" Did you mean this? \tfail\n",
 		},
+		{
+			name:       "TOML として読めない config.toml",
+			configTOML: invalidTOML,
+			runE:       returnError(nil),
+			wantCode:   3,
+			wantStderr: "configuration / confirmation required: {configFile}: invalid TOML (line 1, column 8)\n",
+		},
+		{
+			name:       "型が合わない config.toml",
+			configTOML: "[amazon]\nregion = 1\n",
+			runE:       returnError(nil),
+			wantCode:   3,
+			wantStderr: "configuration / confirmation required: {configFile}: invalid key amazon.region (line 2, column 10)\n",
+		},
+		{
+			name:       "§58 に無い key がある config.toml",
+			configTOML: "[notion]\ntoken = \"x\"\n",
+			runE:       returnError(nil),
+			wantCode:   3,
+			wantStderr: "configuration / confirmation required: {configFile}: unknown key notion.token (line 2, column 1)\n",
+		},
+		{
+			name:       "壊れた config.toml でも help は前処理を飛ばす",
+			args:       []string{"help"},
+			configTOML: invalidTOML,
+			runE:       returnError(nil),
+			wantCode:   0,
+			wantStderr: "",
+		},
+		{
+			name:       "壊れた config.toml でも completion bash は前処理を飛ばす",
+			args:       []string{"completion", "bash"},
+			configTOML: invalidTOML,
+			runE:       returnError(nil),
+			wantCode:   0,
+			wantStderr: "",
+		},
+		{
+			name:       "壊れた config.toml でも __complete は前処理を飛ばす",
+			args:       []string{"__complete", ""},
+			configTOML: invalidTOML,
+			runE:       returnError(nil),
+			wantCode:   0,
+			wantStderr: "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			p := setupXDG(t, tt.configTOML)
 			root := newRootCmd()
 			root.AddCommand(&cobra.Command{Use: "fail", RunE: tt.runE})
 			args := tt.args
@@ -179,8 +231,9 @@ func TestExecute(t *testing.T) {
 			if code != tt.wantCode {
 				t.Errorf("execute() code = %d, want %d", code, tt.wantCode)
 			}
-			if got := stderr.String(); got != tt.wantStderr {
-				t.Errorf("execute() stderr = %q, want %q", got, tt.wantStderr)
+			wantStderr := strings.ReplaceAll(tt.wantStderr, configFilePlaceholder, p.ConfigFile)
+			if got := stderr.String(); got != wantStderr {
+				t.Errorf("execute() stderr = %q, want %q", got, wantStderr)
 			}
 		})
 	}
