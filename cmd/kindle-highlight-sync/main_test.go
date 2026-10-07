@@ -66,13 +66,11 @@ func TestExecute(t *testing.T) {
 		}
 	}
 	tests := []struct {
-		name             string
-		args             []string
-		runE             func(*cobra.Command, []string) error
-		wantCode         int
-		wantStderr       string
-		wantStderrPrefix string
-		wantSingleLine   bool
+		name       string
+		args       []string
+		runE       func(*cobra.Command, []string) error
+		wantCode   int
+		wantStderr string
 	}{
 		{
 			name:       "Amazon authentication required",
@@ -161,11 +159,11 @@ func TestExecute(t *testing.T) {
 			wantStderr: "general error: request failed Authorization: [REDACTED]\n",
 		},
 		{
-			name:             "unknown command suggestion",
-			args:             []string{"fial"},
-			wantCode:         1,
-			wantStderrPrefix: "general error: unknown command \"fial\" for \"kindle-highlight-sync\"",
-			wantSingleLine:   true,
+			name:       "unknown command suggestion",
+			args:       []string{"fial"},
+			runE:       returnError(nil),
+			wantCode:   1,
+			wantStderr: "general error: unknown command \"fial\" for \"kindle-highlight-sync\" Did you mean this? \tfail\n",
 		},
 	}
 	for _, tt := range tests {
@@ -181,14 +179,7 @@ func TestExecute(t *testing.T) {
 			if code != tt.wantCode {
 				t.Errorf("execute() code = %d, want %d", code, tt.wantCode)
 			}
-			if tt.wantStderrPrefix != "" {
-				if got := stderr.String(); !strings.HasPrefix(got, tt.wantStderrPrefix) {
-					t.Errorf("execute() stderr = %q, want prefix %q", got, tt.wantStderrPrefix)
-				}
-				if got := stderr.String(); tt.wantSingleLine && (!strings.HasSuffix(got, "\n") || strings.Count(got, "\n") != 1) {
-					t.Errorf("execute() stderr = %q, want exactly one trailing newline", got)
-				}
-			} else if got := stderr.String(); got != tt.wantStderr {
+			if got := stderr.String(); got != tt.wantStderr {
 				t.Errorf("execute() stderr = %q, want %q", got, tt.wantStderr)
 			}
 		})
