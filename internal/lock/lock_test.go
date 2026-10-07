@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -155,7 +156,8 @@ func TestHelperProcess(t *testing.T) {
 	if path == "" {
 		return
 	}
-	if _, err := Acquire(path); err != nil {
+	l, err := Acquire(path)
+	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
@@ -163,6 +165,7 @@ func TestHelperProcess(t *testing.T) {
 		os.Exit(2)
 	}
 	_, _ = io.Copy(io.Discard, os.Stdin)
+	runtime.KeepAlive(l)
 	os.Exit(0)
 }
 
