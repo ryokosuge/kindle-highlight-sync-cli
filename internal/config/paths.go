@@ -1,4 +1,3 @@
-// Package config resolves where kindle-highlight-sync keeps its files.
 package config
 
 import (
