@@ -28,12 +28,7 @@ func execute(root *cobra.Command, args []string, stdout, stderr io.Writer) (code
 	root.SetArgs(args)
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	cmd, err := root.ExecuteC()
-	if err == nil && cmd == root && !root.HasSubCommands() && len(root.Flags().Args()) > 0 {
-		// subcommand を持たない root では cobra の legacyArgs が未知の引数を受け入れて help を出すため、cobra と同じ文言で unknown command にする一時手当て。#23 で sync サブコマンドが入ったら外す。
-		err = exitcode.New(exitcode.General, fmt.Errorf("unknown command %q for %q", root.Flags().Args()[0], root.CommandPath()))
-	}
-	if err != nil {
+	if err := root.Execute(); err != nil {
 		return report(stderr, err)
 	}
 	return 0
