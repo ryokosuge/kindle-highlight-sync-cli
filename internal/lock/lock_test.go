@@ -180,6 +180,9 @@ func TestAcquireNonContentionFailure(t *testing.T) {
 		{
 			name: "権限が無い",
 			path: func(t *testing.T) string {
+				if os.Geteuid() == 0 {
+					t.Skip("root ignores directory permissions")
+				}
 				dir := t.TempDir()
 				if err := os.Chmod(dir, 0o500); err != nil {
 					t.Fatalf("os.Chmod(%q) error = %v", dir, err)
@@ -195,9 +198,6 @@ func TestAcquireNonContentionFailure(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if tt.name == "権限が無い" && os.Geteuid() == 0 {
-				t.Skip("root can write in directories without write permission")
-			}
 			l, err := Acquire(tt.path(t))
 			if l != nil {
 				t.Errorf("Acquire() lock = %v, want nil", l)
