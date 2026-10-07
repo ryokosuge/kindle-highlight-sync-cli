@@ -214,7 +214,7 @@ func TestExecute(t *testing.T) {
 			configTOML: invalidTOML,
 			runE:       returnError(nil),
 			wantCode:   0,
-			wantStderr: "",
+			wantStderr: "Completion ended with directive: ShellCompDirectiveNoFileComp\n",
 		},
 	}
 	for _, tt := range tests {

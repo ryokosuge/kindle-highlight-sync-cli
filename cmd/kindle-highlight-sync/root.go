@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"io"
 	"io/fs"
 
 	"github.com/spf13/cobra"
@@ -32,9 +31,6 @@ func newRootCmdWith(a *app) *cobra.Command {
 	}
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if isCobraDefaultCmd(cmd) {
-			if cmd.Name() == cobra.ShellCompRequestCmd {
-				cmd.Root().SetErr(io.Discard)
-			}
 			return nil
 		}
 		p, err := config.DefaultPaths()
