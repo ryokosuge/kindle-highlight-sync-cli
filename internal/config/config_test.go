@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const specExample = `[amazon]
@@ -82,9 +84,29 @@ func TestLoadError(t *testing.T) {
 			want:    "notion.mapping.title",
 		},
 		{
+			name:    "inline table の型違い",
+			content: "notion = { mapping = { title = 1 } }\n",
+			want:    "notion.mapping.title",
+		},
+		{
+			name:    "範囲外の浮動小数点",
+			content: "[amazon]\nregion = 1e999\n",
+			want:    "amazon.region",
+		},
+		{
 			name:    "未知の key",
 			content: "[notion]\ntoken = \"ntn_abc123\"\n",
 			want:    "unknown key notion.token",
+		},
+		{
+			name:    "大文字小文字だけ違う key",
+			content: "[amazon]\nREGION = \"japan\"\n",
+			want:    "unknown key amazon.REGION",
+		},
+		{
+			name:    "大文字小文字だけ違う key の併記",
+			content: "[amazon]\nregion = \"japan\"\nREGION = \"us\"\n",
+			want:    "unknown key amazon.REGION",
 		},
 	}
 	for _, tt := range tests {
@@ -106,15 +128,52 @@ func TestLoadError(t *testing.T) {
 }
 
 func TestLoadErrorOmitsValue(t *testing.T) {
-	path := writeConfig(t, "[notion]\ntoken = \"ntn_abc123\"\n")
+	tests := []struct {
+		name    string
+		content string
+		value   string
+	}{
+		{
+			name:    "未知の key",
+			content: "[notion]\ntoken = \"ntn_abc123\"\n",
+			value:   "ntn_abc123",
+		},
+		{
+			name:    "範囲外の浮動小数点",
+			content: "[amazon]\nregion = 1e999\n",
+			value:   "1e999",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := writeConfig(t, tt.content)
 
-	_, err := Load(path)
-	if err == nil {
-		t.Fatal("Load() error = nil, want error")
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load() error = nil, want error")
+			}
+			if strings.Contains(err.Error(), tt.value) {
+				t.Errorf("Load() error = %q, want it not to contain %q", err, tt.value)
+			}
+		})
 	}
-	if strings.Contains(err.Error(), "ntn_abc123") {
-		t.Errorf("Load() error = %q, want it not to contain the value", err)
-	}
+}
+
+func TestLoadErrorAs(t *testing.T) {
+	t.Run("型違いは *toml.DecodeError", func(t *testing.T) {
+		_, err := Load(writeConfig(t, "[amazon]\nregion = 1\n"))
+		var de *toml.DecodeError
+		if !errors.As(err, &de) {
+			t.Errorf("Load() error = %v, want *toml.DecodeError", err)
+		}
+	})
+	t.Run("未知の key は *toml.StrictMissingError", func(t *testing.T) {
+		_, err := Load(writeConfig(t, "[notion]\ntoken = \"ntn_abc123\"\n"))
+		var missing *toml.StrictMissingError
+		if !errors.As(err, &missing) {
+			t.Errorf("Load() error = %v, want *toml.StrictMissingError", err)
+		}
+	})
 }
 
 func TestLoadNotExist(t *testing.T) {
