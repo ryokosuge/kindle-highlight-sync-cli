@@ -240,6 +240,18 @@ func TestDeadlineExceeded(t *testing.T) {
 	}
 }
 
+func assertChainHidesToken(t *testing.T, err error) {
+	t.Helper()
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		if strings.Contains(e.Error(), testToken) {
+			t.Errorf("error chain contains token: %q", e)
+		}
+	}
+	if errors.As(err, new(*url.Error)) {
+		t.Error("errors.As(err, new(*url.Error)) = true, want false")
+	}
+}
+
 func TestErrorChainDoesNotContainToken(t *testing.T) {
 	t.Run("通信失敗", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
@@ -249,14 +261,7 @@ func TestErrorChainDoesNotContainToken(t *testing.T) {
 		client := New(testToken, WithBaseURL(baseURL))
 		_, err := client.RetrieveDatabase(context.Background(), testToken)
 		assertNotionError(t, err)
-		for e := err; e != nil; e = errors.Unwrap(e) {
-			if strings.Contains(e.Error(), testToken) {
-				t.Errorf("error chain contains token: %q", e)
-			}
-		}
-		if errors.As(err, new(*url.Error)) {
-			t.Error("errors.As(err, new(*url.Error)) = true, want false")
-		}
+		assertChainHidesToken(t, err)
 	})
 
 	t.Run("取り消し", func(t *testing.T) {
@@ -266,14 +271,7 @@ func TestErrorChainDoesNotContainToken(t *testing.T) {
 
 		_, err := client.RetrieveDatabase(ctx, testToken)
 		assertNotionError(t, err)
-		for e := err; e != nil; e = errors.Unwrap(e) {
-			if strings.Contains(e.Error(), testToken) {
-				t.Errorf("error chain contains token: %q", e)
-			}
-		}
-		if errors.As(err, new(*url.Error)) {
-			t.Error("errors.As(err, new(*url.Error)) = true, want false")
-		}
+		assertChainHidesToken(t, err)
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("errors.Is(err, context.Canceled) = false, err = %v", err)
 		}
