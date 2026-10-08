@@ -25,30 +25,39 @@ func setupSecrets(t *testing.T, envToken string) {
 
 func TestNotionToken(t *testing.T) {
 	tests := []struct {
-		name         string
-		envToken     string
-		keychain     bool
-		keychainFail error
-		wantToken    string
-		wantSource   Source
-		wantErr      bool
+		name          string
+		envToken      string
+		keychain      bool
+		keychainToken string
+		keychainFail  error
+		wantToken     string
+		wantSource    Source
+		wantErr       bool
 	}{
 		{
-			name:       "環境変数が Keychain より優先される",
-			envToken:   "env-token",
-			keychain:   true,
-			wantToken:  "env-token",
-			wantSource: SourceEnv,
+			name:          "環境変数が Keychain より優先される",
+			envToken:      "env-token",
+			keychain:      true,
+			keychainToken: "keychain-token",
+			wantToken:     "env-token",
+			wantSource:    SourceEnv,
 		},
 		{
-			name:       "環境変数が空なら Keychain を使う",
-			keychain:   true,
-			wantToken:  "keychain-token",
-			wantSource: SourceKeychain,
+			name:          "環境変数が空なら Keychain を使う",
+			keychain:      true,
+			keychainToken: "keychain-token",
+			wantToken:     "keychain-token",
+			wantSource:    SourceKeychain,
 		},
 		{
 			name:    "どちらにも token がない",
 			wantErr: true,
+		},
+		{
+			name:          "Keychain の値が空なら token がない",
+			keychain:      true,
+			keychainToken: "",
+			wantErr:       true,
 		},
 		{
 			name:         "環境変数があれば Keychain の失敗を見ない",
@@ -62,7 +71,7 @@ func TestNotionToken(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			setupSecrets(t, tt.envToken)
 			if tt.keychain {
-				if err := keyring.Set("kindle-highlight-sync", "notion-token", "keychain-token"); err != nil {
+				if err := keyring.Set("kindle-highlight-sync", "notion-token", tt.keychainToken); err != nil {
 					t.Fatalf("keyring.Set() error = %v", err)
 				}
 			}

@@ -32,7 +32,7 @@ var ErrNotFound = errors.New("notion token not found in " + EnvNotionToken + " o
 var getenv = os.Getenv
 
 // NotionToken は環境変数、無ければ Keychain の順に Notion token を探し、得た場所も返す。
-// どちらにも無ければ ErrNotFound を返す。
+// どちらにも無ければ（Keychain の値が空でも）ErrNotFound を返す。
 func NotionToken() (string, Source, error) {
 	if token := getenv(EnvNotionToken); token != "" {
 		return token, SourceEnv, nil
@@ -43,6 +43,9 @@ func NotionToken() (string, Source, error) {
 	}
 	if err != nil {
 		return "", 0, &keychainError{op: "read", err: err}
+	}
+	if token == "" {
+		return "", 0, ErrNotFound
 	}
 	return token, SourceKeychain, nil
 }
