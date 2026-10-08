@@ -36,6 +36,7 @@ type initNotionServer struct {
 	server    *httptest.Server
 	mu        sync.Mutex
 	paths     []string
+	methods   []string
 	auth      []string
 	responses map[string]initResponse
 }
@@ -46,6 +47,7 @@ func newInitNotionServer(t *testing.T, responses map[string]initResponse) *initN
 	stub.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		stub.mu.Lock()
 		stub.paths = append(stub.paths, r.URL.Path)
+		stub.methods = append(stub.methods, r.Method)
 		stub.auth = append(stub.auth, r.Header.Get("Authorization"))
 		stub.mu.Unlock()
 
@@ -62,9 +64,9 @@ func newInitNotionServer(t *testing.T, responses map[string]initResponse) *initN
 	return stub
 }
 
-func setupInit(t *testing.T, input, token string, stub *initNotionServer) config.Paths {
+func setupInit(t *testing.T, input, token, configTOML string, stub *initNotionServer) config.Paths {
 	t.Helper()
-	p := setupXDG(t, "")
+	p := setupXDG(t, configTOML)
 	keyring.MockInit()
 	t.Setenv(secrets.EnvNotionToken, token)
 
@@ -95,7 +97,7 @@ func initDatabaseResponse(dataSources ...string) initResponse {
 	}
 }
 
-func initDataSourceResponse(includeDate, onlyMemoKindle bool) initResponse {
+func initDataSourceResponse(dataSourceID string, includeDate, onlyMemoKindle bool) initResponse {
 	properties := []string{
 		`"Name":{"id":"title","name":"Name","type":"title"}`,
 	}
@@ -114,7 +116,7 @@ func initDataSourceResponse(includeDate, onlyMemoKindle bool) initResponse {
 	}
 	return initResponse{
 		status: http.StatusOK,
-		body:   fmt.Sprintf(`{"object":"data_source","id":"ds-1","properties":{%s}}`, strings.Join(properties, ",")),
+		body:   fmt.Sprintf(`{"object":"data_source","id":%q,"properties":{%s}}`, dataSourceID, strings.Join(properties, ",")),
 	}
 }
 
@@ -128,7 +130,7 @@ func initRoutes(dataSource initResponse) map[string]initResponse {
 func runInitTest(t *testing.T, args []string, input, token string, responses map[string]initResponse) (config.Paths, *initNotionServer, int, string, string) {
 	t.Helper()
 	stub := newInitNotionServer(t, responses)
-	p := setupInit(t, input, token, stub)
+	p := setupInit(t, input, token, "", stub)
 	var stdout, stderr bytes.Buffer
 	code := run(args, &stdout, &stderr)
 	return p, stub, code, stdout.String(), stderr.String()
@@ -143,10 +145,17 @@ func loadInitConfig(t *testing.T, path string) *config.Config {
 	return cfg
 }
 
+func wantInitSummary(path string) string {
+	return "saved " + path + "\n" +
+		"database_id: " + initDatabaseID + "\n" +
+		"data source: Books\n" +
+		"title: Name\nkindle_id: Kindle ID\nauthor: Author\nasin: ASIN\nlast_annotated_at: Last Annotated At\n"
+}
+
 func TestInitInteractive(t *testing.T) {
 	t.Run("token と既定の対応を保存する", func(t *testing.T) {
 		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
-		p, stub, code, stdout, stderr := runInitTest(t, []string{"init"}, input, "", initRoutes(initDataSourceResponse(true, false)))
+		p, stub, code, stdout, stderr := runInitTest(t, []string{"init"}, input, "", initRoutes(initDataSourceResponse("ds-1", true, false)))
 		if code != 0 {
 			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 		}
@@ -159,10 +168,7 @@ func TestInitInteractive(t *testing.T) {
 		if stderr != wantStderr {
 			t.Errorf("stderr = %q, want %q", stderr, wantStderr)
 		}
-		wantStdout := "saved " + p.ConfigFile + "\n" +
-			"database_id: " + initDatabaseID + "\n" +
-			"data source: Books\n" +
-			"title: Name\nkindle_id: Kindle ID\nauthor: Author\nasin: ASIN\nlast_annotated_at: Last Annotated At\n"
+		wantStdout := wantInitSummary(p.ConfigFile)
 		if stdout != wantStdout {
 			t.Errorf("stdout = %q, want %q", stdout, wantStdout)
 		}
@@ -191,11 +197,19 @@ func TestInitInteractive(t *testing.T) {
 		if len(stub.auth) != 2 || stub.auth[0] != "Bearer "+initTokenValue || stub.auth[1] != "Bearer "+initTokenValue {
 			t.Errorf("Authorization headers = %v", stub.auth)
 		}
+		if len(stub.methods) != 2 {
+			t.Fatalf("request methods = %v, want two GETs", stub.methods)
+		}
+		for _, method := range stub.methods {
+			if method != http.MethodGet {
+				t.Errorf("request method = %q, want GET", method)
+			}
+		}
 	})
 
 	t.Run("Keychain に値があっても入力を求めて上書きする", func(t *testing.T) {
-		stub := newInitNotionServer(t, initRoutes(initDataSourceResponse(true, false)))
-		p := setupInit(t, initTokenValue+"\n"+initDatabaseRawID+"\n\n\n\n\n\n", "", stub)
+		stub := newInitNotionServer(t, initRoutes(initDataSourceResponse("ds-1", true, false)))
+		setupInit(t, initTokenValue+"\n"+initDatabaseRawID+"\n\n\n\n\n\n", "", "", stub)
 		if err := keyring.Set("kindle-highlight-sync", "notion-token", "old-token"); err != nil {
 			t.Fatal(err)
 		}
@@ -210,12 +224,11 @@ func TestInitInteractive(t *testing.T) {
 		if len(stub.auth) == 0 || stub.auth[0] != "Bearer "+initTokenValue {
 			t.Errorf("Authorization headers = %v", stub.auth)
 		}
-		_ = p
 	})
 
 	t.Run("環境変数の token は保存しない", func(t *testing.T) {
 		input := "https://www.notion.so/Books-" + initDatabaseRawID + "\n\n\n\n\n\n"
-		_, stub, code, _, stderr := runInitTest(t, []string{"init"}, input, initTokenValue, initRoutes(initDataSourceResponse(true, false)))
+		_, stub, code, _, stderr := runInitTest(t, []string{"init"}, input, initTokenValue, initRoutes(initDataSourceResponse("ds-1", true, false)))
 		if code != 0 {
 			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 		}
@@ -229,13 +242,29 @@ func TestInitInteractive(t *testing.T) {
 			t.Errorf("stderr unexpectedly prompts for token: %q", stderr)
 		}
 	})
+
+	t.Run("0 で既定の author を解除し、ASIN に Memo を選ぶ", func(t *testing.T) {
+		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n0\n4\n\n"
+		p, _, code, stdout, stderr := runInitTest(t, []string{"init"}, input, "", initRoutes(initDataSourceResponse("ds-1", true, false)))
+		if code != 0 {
+			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
+		}
+		want := config.Mapping{Title: "title", KindleID: "kindle-id", ASIN: "memo", LastAnnotatedAt: "last-annotated-at"}
+		cfg := loadInitConfig(t, p.ConfigFile)
+		if cfg.Notion.Mapping != want {
+			t.Errorf("mapping = %+v, want %+v", cfg.Notion.Mapping, want)
+		}
+		if !strings.Contains(stdout, "author: (not mapped)\nasin: Memo\n") {
+			t.Errorf("stdout = %q, want author unmapped and Memo ASIN", stdout)
+		}
+	})
 }
 
 func TestInitChoices(t *testing.T) {
 	t.Run("複数 Data Source を選ぶ", func(t *testing.T) {
-		responses := initRoutes(initDataSourceResponse(true, false))
+		responses := initRoutes(initDataSourceResponse("ds-1", true, false))
 		responses["/v1/databases/"+initDatabaseID] = initDatabaseResponse("Books", "Archive")
-		responses["/v1/data_sources/ds-2"] = initDataSourceResponse(true, false)
+		responses["/v1/data_sources/ds-2"] = initDataSourceResponse("ds-2", true, false)
 		input := initDatabaseRawID + "\n2\n\n\n\n\n\n"
 		p, stub, code, stdout, stderr := runInitTest(t, []string{"init"}, initTokenValue+"\n"+input, "", responses)
 		if code != 0 {
@@ -244,14 +273,20 @@ func TestInitChoices(t *testing.T) {
 		if !strings.Contains(stdout, "data source: Archive\n") {
 			t.Errorf("stdout = %q, want Archive", stdout)
 		}
+		if !strings.Contains(stderr, "Data Source\n  1) Books\n  2) Archive\nnumber: ") {
+			t.Errorf("stderr = %q, want exact Data Source prompt", stderr)
+		}
 		if len(stub.paths) < 2 || stub.paths[1] != "/v1/data_sources/ds-2" {
 			t.Errorf("paths = %v", stub.paths)
 		}
-		_ = p
+		cfg := loadInitConfig(t, p.ConfigFile)
+		if cfg.Notion.DataSourceID != "ds-2" {
+			t.Errorf("DataSourceID = %q, want ds-2", cfg.Notion.DataSourceID)
+		}
 	})
 
 	t.Run("既定値を変更し、候補のない date を未対応にする", func(t *testing.T) {
-		responses := initRoutes(initDataSourceResponse(false, true))
+		responses := initRoutes(initDataSourceResponse("ds-1", false, true))
 		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n1\n\n1\n\n"
 		p, _, code, _, stderr := runInitTest(t, []string{"init"}, input, "", responses)
 		if code != 0 {
@@ -272,92 +307,102 @@ func TestInitChoices(t *testing.T) {
 }
 
 func TestInitConfigSafety(t *testing.T) {
-	t.Run("既存の有効な config は拒否し、force でも data を保持する", func(t *testing.T) {
-		p0 := setupXDG(t, validConfigTOML)
-		if err := os.MkdirAll(filepath.Join(p0.DataDir, "browser-profile"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		profileFile := filepath.Join(p0.DataDir, "browser-profile", "keep")
-		stateFile := filepath.Join(p0.DataDir, "state.db")
-		if err := os.WriteFile(profileFile, []byte("profile"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(stateFile, []byte("state"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		before, err := os.ReadFile(p0.ConfigFile)
-		if err != nil {
-			t.Fatal(err)
-		}
-		keyring.MockInit()
-		t.Setenv(secrets.EnvNotionToken, initTokenValue)
-		var stdout, stderr bytes.Buffer
-		if code := run([]string{"init"}, &stdout, &stderr); code != 3 {
-			t.Errorf("run(init) code = %d, want 3", code)
-		}
-		wantErr := "configuration / confirmation required: " + p0.ConfigFile + " already exists: run init --force to recreate it\n"
-		if stderr.String() != wantErr {
-			t.Errorf("stderr = %q, want %q", stderr.String(), wantErr)
-		}
-		after, _ := os.ReadFile(p0.ConfigFile)
-		if !bytes.Equal(before, after) {
-			t.Error("refused init changed config.toml")
-		}
-		if data, _ := os.ReadFile(profileFile); string(data) != "profile" {
-			t.Error("refused init changed browser-profile")
-		}
-		if data, _ := os.ReadFile(stateFile); string(data) != "state" {
-			t.Error("refused init changed state.db")
-		}
-	})
+	tests := []struct {
+		name       string
+		configTOML string
+	}{
+		{name: "有効な config", configTOML: validConfigTOML},
+		{name: "壊れた config", configTOML: invalidTOML},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			stub := newInitNotionServer(t, initRoutes(initDataSourceResponse("ds-1", true, false)))
+			input := initDatabaseRawID + "\n\n\n\n\n\n"
+			p := setupInit(t, input, initTokenValue, tt.configTOML, stub)
+			profileFile := filepath.Join(p.DataDir, "browser-profile", "keep")
+			stateFile := filepath.Join(p.DataDir, "state.db")
+			if err := os.MkdirAll(filepath.Dir(profileFile), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(profileFile, []byte("profile"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(stateFile, []byte("state"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(p.ConfigFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertDataPreserved := func() {
+				t.Helper()
+				if data, err := os.ReadFile(profileFile); err != nil || string(data) != "profile" {
+					t.Errorf("browser-profile/keep = %q, %v", data, err)
+				}
+				if data, err := os.ReadFile(stateFile); err != nil || string(data) != "state" {
+					t.Errorf("state.db = %q, %v", data, err)
+				}
+			}
 
-	t.Run("壊れた config は拒否し、force で再作成する", func(t *testing.T) {
-		p0 := setupXDG(t, invalidTOML)
-		stub := newInitNotionServer(t, initRoutes(initDataSourceResponse(true, false)))
-		oldPrompter, oldClient := newInitPrompter, newNotionClient
-		newInitPrompter = func(cmd *cobra.Command) *prompter {
-			cmd.SetIn(strings.NewReader(initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"))
-			return newPrompter(cmd)
-		}
-		newNotionClient = func(token string) *notion.Client {
-			return notion.New(token, notion.WithBaseURL(stub.server.URL))
-		}
-		t.Cleanup(func() { newInitPrompter, newNotionClient = oldPrompter, oldClient })
-		keyring.MockInit()
-		t.Setenv(secrets.EnvNotionToken, "")
-		var stdout, stderr bytes.Buffer
-		if code := run([]string{"init"}, &stdout, &stderr); code != 3 {
-			t.Errorf("run(init) code = %d, want 3", code)
-		}
-		wantErr := "configuration / confirmation required: " + p0.ConfigFile + " already exists: run init --force to recreate it\n"
-		if stderr.String() != wantErr {
-			t.Errorf("stderr = %q, want %q", stderr.String(), wantErr)
-		}
-		before, _ := os.ReadFile(p0.ConfigFile)
-		stdout.Reset()
-		stderr.Reset()
-		if code := run([]string{"init", "--force"}, &stdout, &stderr); code != 0 {
-			t.Fatalf("run(init --force) code = %d, stderr = %q", code, stderr.String())
-		}
-		after, _ := os.ReadFile(p0.ConfigFile)
-		if bytes.Equal(before, after) {
-			t.Error("force init did not replace broken config.toml")
-		}
-	})
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"init"}, &stdout, &stderr); code != 3 {
+				t.Errorf("run(init) code = %d, want 3", code)
+			}
+			wantErr := "configuration / confirmation required: " + p.ConfigFile + " already exists: run init --force to recreate it\n"
+			if stderr.String() != wantErr {
+				t.Errorf("stderr = %q, want %q", stderr.String(), wantErr)
+			}
+			after, err := os.ReadFile(p.ConfigFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(before, after) {
+				t.Error("refused init changed config.toml")
+			}
+			if len(stub.paths) != 0 {
+				t.Errorf("refused init made Notion requests: %v", stub.paths)
+			}
+			assertDataPreserved()
+
+			stdout.Reset()
+			stderr.Reset()
+			if code := run([]string{"init", "--force"}, &stdout, &stderr); code != 0 {
+				t.Fatalf("run(init --force) code = %d, stderr = %q", code, stderr.String())
+			}
+			want := &config.Config{
+				Amazon: config.Amazon{Region: initRegion},
+				Notion: config.Notion{
+					DatabaseID: initDatabaseID, DataSourceID: "ds-1",
+					Mapping: config.Mapping{Title: "title", KindleID: "kindle-id", Author: "author", ASIN: "asin", LastAnnotatedAt: "last-annotated-at"},
+				},
+			}
+			if got := loadInitConfig(t, p.ConfigFile); *got != *want {
+				t.Errorf("config = %+v, want %+v", *got, *want)
+			}
+			assertDataPreserved()
+		})
+	}
 }
 
 func TestInitYes(t *testing.T) {
 	t.Run("database-id と環境 token で既定値を保存し、何も表示しない", func(t *testing.T) {
-		p, _, code, stdout, stderr := runInitTest(t, []string{"init", "--yes", "--database-id", initDatabaseRawID}, "", initTokenValue, initRoutes(initDataSourceResponse(true, false)))
+		p, _, code, stdout, stderr := runInitTest(t, []string{"init", "--yes", "--database-id", initDatabaseRawID}, "", initTokenValue, initRoutes(initDataSourceResponse("ds-1", true, false)))
 		if code != 0 || stderr != "" {
 			t.Fatalf("run(init --yes) code = %d, stderr = %q", code, stderr)
 		}
-		if stdout == "" {
-			t.Error("stdout is empty")
+		if want := wantInitSummary(p.ConfigFile); stdout != want {
+			t.Errorf("stdout = %q, want %q", stdout, want)
 		}
 		cfg := loadInitConfig(t, p.ConfigFile)
-		if cfg.Notion.Mapping.KindleID != "kindle-id" || cfg.Notion.Mapping.Title != "title" {
-			t.Errorf("mapping = %+v", cfg.Notion.Mapping)
+		want := &config.Config{
+			Amazon: config.Amazon{Region: initRegion},
+			Notion: config.Notion{
+				DatabaseID: initDatabaseID, DataSourceID: "ds-1",
+				Mapping: config.Mapping{Title: "title", KindleID: "kindle-id", Author: "author", ASIN: "asin", LastAnnotatedAt: "last-annotated-at"},
+			},
+		}
+		if *cfg != *want {
+			t.Errorf("config = %+v, want %+v", *cfg, *want)
 		}
 		if got, err := keyring.Get("kindle-highlight-sync", "notion-token"); !errors.Is(err, keyring.ErrNotFound) || got != "" {
 			t.Errorf("keyring token = %q, %v; want not found", got, err)
@@ -365,8 +410,8 @@ func TestInitYes(t *testing.T) {
 	})
 
 	t.Run("Keychain token を使う", func(t *testing.T) {
-		stub := newInitNotionServer(t, initRoutes(initDataSourceResponse(true, false)))
-		setupInit(t, "", "", stub)
+		stub := newInitNotionServer(t, initRoutes(initDataSourceResponse("ds-1", true, false)))
+		setupInit(t, "", "", "", stub)
 		if err := keyring.Set("kindle-highlight-sync", "notion-token", "keychain-token"); err != nil {
 			t.Fatal(err)
 		}
@@ -394,7 +439,7 @@ func TestInitYes(t *testing.T) {
 			}
 		})
 		t.Run("required default なし", func(t *testing.T) {
-			p, stub, code, _, stderr := runInitTest(t, []string{"init", "--yes", "--database-id", initDatabaseRawID}, "", initTokenValue, initRoutes(initDataSourceResponse(false, true)))
+			p, stub, code, _, stderr := runInitTest(t, []string{"init", "--yes", "--database-id", initDatabaseRawID}, "", initTokenValue, initRoutes(initDataSourceResponse("ds-1", false, true)))
 			if code != 3 || stderr != "configuration / confirmation required: no default property for kindle_id: run init without --yes to choose\n" {
 				t.Errorf("code = %d, stderr = %q", code, stderr)
 			}
@@ -406,7 +451,7 @@ func TestInitYes(t *testing.T) {
 			}
 		})
 		t.Run("複数 Data Source", func(t *testing.T) {
-			responses := initRoutes(initDataSourceResponse(true, false))
+			responses := initRoutes(initDataSourceResponse("ds-1", true, false))
 			responses["/v1/databases/"+initDatabaseID] = initDatabaseResponse("Books", "Archive")
 			p, stub, code, _, stderr := runInitTest(t, []string{"init", "--yes", "--database-id", initDatabaseRawID}, "", initTokenValue, responses)
 			want := "configuration / confirmation required: database has 2 data sources: run init without --yes to choose one\n"
@@ -461,10 +506,13 @@ func TestInitErrors(t *testing.T) {
 		responses := map[string]initResponse{
 			"/v1/databases/" + initDatabaseID: initDatabaseResponse(),
 		}
-		_, stub, code, _, stderr := runInitTest(t, []string{"init", "--database-id", initDatabaseRawID}, "", initTokenValue, responses)
+		p, stub, code, _, stderr := runInitTest(t, []string{"init", "--database-id", initDatabaseRawID}, "", initTokenValue, responses)
 		want := "configuration / confirmation required: database has no data source\n"
 		if code != 3 || stderr != want {
 			t.Errorf("code = %d, stderr = %q, want %q", code, stderr, want)
+		}
+		if _, err := os.Stat(p.ConfigFile); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("config exists: %v", err)
 		}
 		if len(stub.paths) != 1 {
 			t.Errorf("paths = %v, want one database request", stub.paths)
@@ -491,6 +539,29 @@ func TestInitErrors(t *testing.T) {
 		}
 	})
 
+	t.Run("interactive Notion エラーでは token を保存しない", func(t *testing.T) {
+		responses := map[string]initResponse{
+			"/v1/databases/" + initDatabaseID: {
+				status: http.StatusUnauthorized,
+				body:   `{"object":"error","status":401,"code":"unauthorized","message":"API token ` + initTokenValue + ` is invalid."}`,
+			},
+		}
+		input := initTokenValue + "\n" + initDatabaseRawID + "\n"
+		p, _, code, stdout, stderr := runInitTest(t, []string{"init"}, input, "", responses)
+		if code != 4 {
+			t.Errorf("code = %d, want 4", code)
+		}
+		if _, err := os.Stat(p.ConfigFile); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("config exists: %v", err)
+		}
+		if _, err := keyring.Get("kindle-highlight-sync", "notion-token"); !errors.Is(err, keyring.ErrNotFound) {
+			t.Errorf("keyring token error = %v, want not found", err)
+		}
+		if strings.Contains(stdout+stderr, initTokenValue) {
+			t.Errorf("output contains token: stdout=%q stderr=%q", stdout, stderr)
+		}
+	})
+
 	t.Run("Notion の Data Source エラーは config を作らない", func(t *testing.T) {
 		responses := map[string]initResponse{
 			"/v1/databases/" + initDatabaseID: initDatabaseResponse("Books"),
@@ -509,24 +580,17 @@ func TestInitErrors(t *testing.T) {
 	})
 
 	t.Run("force と Notion エラーでは古い config を保持する", func(t *testing.T) {
-		p := setupXDG(t, validConfigTOML)
-		before, err := os.ReadFile(p.ConfigFile)
-		if err != nil {
-			t.Fatal(err)
-		}
 		stub := newInitNotionServer(t, map[string]initResponse{
 			"/v1/databases/" + initDatabaseID: {
 				status: http.StatusUnauthorized,
 				body:   `{"object":"error","status":401,"code":"unauthorized","message":"API token ` + initTokenValue + ` is invalid."}`,
 			},
 		})
-		keyring.MockInit()
-		t.Setenv(secrets.EnvNotionToken, initTokenValue)
-		oldClient := newNotionClient
-		newNotionClient = func(token string) *notion.Client {
-			return notion.New(token, notion.WithBaseURL(stub.server.URL))
+		p := setupInit(t, "", initTokenValue, validConfigTOML, stub)
+		before, err := os.ReadFile(p.ConfigFile)
+		if err != nil {
+			t.Fatal(err)
 		}
-		t.Cleanup(func() { newNotionClient = oldClient })
 		var stdout, stderr bytes.Buffer
 		code := run([]string{"init", "--force", "--yes", "--database-id", initDatabaseRawID}, &stdout, &stderr)
 		if code != 4 {

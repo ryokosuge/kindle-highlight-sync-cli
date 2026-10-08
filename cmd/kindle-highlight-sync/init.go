@@ -82,7 +82,7 @@ func runInit(cmd *cobra.Command, a *app, databaseID string, force, yes bool) err
 	}
 
 	client := newNotionClient(token)
-	_, ref, err := initDataSource(cmd, client, id, p, yes)
+	ref, err := initDataSource(cmd, client, id, p, yes)
 	if err != nil {
 		return err
 	}
@@ -148,19 +148,19 @@ func initToken(p *prompter, yes bool) (token string, save bool, err error) {
 	return token, true, nil
 }
 
-func initDataSource(cmd *cobra.Command, client *notion.Client, id string, p *prompter, yes bool) (*notion.Database, notion.DataSourceRef, error) {
+func initDataSource(cmd *cobra.Command, client *notion.Client, id string, p *prompter, yes bool) (notion.DataSourceRef, error) {
 	db, err := client.RetrieveDatabase(cmd.Context(), id)
 	if err != nil {
-		return nil, notion.DataSourceRef{}, err
+		return notion.DataSourceRef{}, err
 	}
 	switch len(db.DataSources) {
 	case 0:
-		return nil, notion.DataSourceRef{}, exitcode.New(exitcode.ConfigRequired, errors.New("database has no data source"))
+		return notion.DataSourceRef{}, exitcode.New(exitcode.ConfigRequired, errors.New("database has no data source"))
 	case 1:
-		return db, db.DataSources[0], nil
+		return db.DataSources[0], nil
 	}
 	if yes {
-		return nil, notion.DataSourceRef{}, exitcode.New(exitcode.ConfigRequired, fmt.Errorf("database has %d data sources: run init without --yes to choose one", len(db.DataSources)))
+		return notion.DataSourceRef{}, exitcode.New(exitcode.ConfigRequired, fmt.Errorf("database has %d data sources: run init without --yes to choose one", len(db.DataSources)))
 	}
 	names := make([]string, len(db.DataSources))
 	for i, ref := range db.DataSources {
@@ -168,9 +168,9 @@ func initDataSource(cmd *cobra.Command, client *notion.Client, id string, p *pro
 	}
 	i, err := p.choose("Data Source", names, noDefault, false)
 	if err != nil {
-		return nil, notion.DataSourceRef{}, err
+		return notion.DataSourceRef{}, err
 	}
-	return db, db.DataSources[i], nil
+	return db.DataSources[i], nil
 }
 
 func initMapping(p *prompter, ds *notion.DataSource, yes bool) (config.Mapping, error) {
