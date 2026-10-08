@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -71,14 +70,17 @@ func TestRetrieveDatabase(t *testing.T) {
 		body string
 		want string
 	}{
-		{name: "object が異なる", body: `{"object":"page","id":"db","data_sources":[]}`, want: "object"},
-		{name: "id がない", body: `{"object":"database","data_sources":[]}`, want: "id"},
-		{name: "data_sources がない", body: `{"object":"database","id":"db"}`, want: "data_sources"},
-		{name: "data_sources が null", body: `{"object":"database","id":"db","data_sources":null}`, want: "data_sources"},
-		{name: "要素の id がない", body: `{"object":"database","id":"db","data_sources":[{"name":"Books"}]}`, want: "data_sources"},
-		{name: "要素の name がない", body: `{"object":"database","id":"db","data_sources":[{"id":"ds"}]}`, want: "data_sources"},
-		{name: "要素の name が null", body: `{"object":"database","id":"db","data_sources":[{"id":"ds","name":null}]}`, want: "data_sources"},
-		{name: "id が重複する", body: `{"object":"database","id":"db","data_sources":[{"id":"ds","name":"A"},{"id":"ds","name":"B"}]}`, want: "data_sources"},
+		{name: "object が異なる", body: `{"object":"page","id":"db","data_sources":[]}`, want: "notion: GET /v1/databases/db: invalid response: object must be database"},
+		{name: "object がない", body: `{"id":"db","data_sources":[]}`, want: "notion: GET /v1/databases/db: invalid response: object is required"},
+		{name: "id がない", body: `{"object":"database","data_sources":[]}`, want: "notion: GET /v1/databases/db: invalid response: id is required"},
+		{name: "id が空", body: `{"object":"database","id":"","data_sources":[]}`, want: "notion: GET /v1/databases/db: invalid response: id must not be empty"},
+		{name: "data_sources がない", body: `{"object":"database","id":"db"}`, want: "notion: GET /v1/databases/db: invalid response: data_sources is required"},
+		{name: "data_sources が null", body: `{"object":"database","id":"db","data_sources":null}`, want: "notion: GET /v1/databases/db: invalid response: data_sources is required"},
+		{name: "要素の id がない", body: `{"object":"database","id":"db","data_sources":[{"name":"Books"}]}`, want: "notion: GET /v1/databases/db: invalid response: data_sources[0].id is required"},
+		{name: "要素の id が空", body: `{"object":"database","id":"db","data_sources":[{"id":"","name":"Books"}]}`, want: "notion: GET /v1/databases/db: invalid response: data_sources[0].id must not be empty"},
+		{name: "要素の name がない", body: `{"object":"database","id":"db","data_sources":[{"id":"ds"}]}`, want: "notion: GET /v1/databases/db: invalid response: data_sources[0].name is required"},
+		{name: "要素の name が null", body: `{"object":"database","id":"db","data_sources":[{"id":"ds","name":null}]}`, want: "notion: GET /v1/databases/db: invalid response: data_sources[0].name is required"},
+		{name: "id が重複する", body: `{"object":"database","id":"db","data_sources":[{"id":"ds","name":"A"},{"id":"ds","name":"B"}]}`, want: "notion: GET /v1/databases/db: invalid response: data_sources contains duplicate id"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -86,7 +88,10 @@ func TestRetrieveDatabase(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			})
 			_, err := client.RetrieveDatabase(context.Background(), "db")
-			assertNotionError(t, err, tt.want)
+			assertNotionError(t, err)
+			if got := err.Error(); got != tt.want {
+				t.Errorf("error = %q, want %q", got, tt.want)
+			}
 		})
 	}
 }
@@ -124,34 +129,6 @@ func TestRetrieveDataSource(t *testing.T) {
 		}
 	})
 
-	tests := []struct {
-		name string
-		body string
-		want string
-	}{
-		{name: "object が異なる", body: `{"object":"database","id":"ds","properties":{}}`, want: "object"},
-		{name: "id がない", body: `{"object":"data_source","properties":{}}`, want: "id"},
-		{name: "properties がない", body: `{"object":"data_source","id":"ds"}`, want: "properties"},
-		{name: "properties が null", body: `{"object":"data_source","id":"ds","properties":null}`, want: "properties"},
-		{name: "Property の id がない", body: `{"object":"data_source","id":"ds","properties":{"Name":{"name":"Name","type":"title"}}}`, want: "id"},
-		{name: "Property の id が空", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"","name":"Name","type":"title"}}}`, want: "id"},
-		{name: "Property の name がない", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","type":"title"}}}`, want: "name"},
-		{name: "Property の type がない", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","name":"Name"}}}`, want: "type"},
-		{name: "Property の type が null", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","name":"Name","type":null}}}`, want: "type"},
-		{name: "Property の type が空", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","name":"Name","type":""}}}`, want: "type"},
-		{name: "key と name が異なる", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","name":"Title","type":"title"}}}`, want: "does not match key"},
-		{name: "Property の id が重複する", body: `{"object":"data_source","id":"ds","properties":{"Author":{"id":"same","name":"Author","type":"rich_text"},"Name":{"id":"same","name":"Name","type":"title"}}}`, want: "duplicate id"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-				_, _ = w.Write([]byte(tt.body))
-			})
-			_, err := client.RetrieveDataSource(context.Background(), "ds")
-			assertNotionError(t, err, tt.want)
-		})
-	}
-
 	t.Run("空の properties を取得する", func(t *testing.T) {
 		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{"object":"data_source","id":"ds","properties":{}}`))
@@ -178,14 +155,36 @@ func TestRetrieveDataSource(t *testing.T) {
 		}
 	})
 
-	t.Run("エラーには Property 名が含まれる", func(t *testing.T) {
-		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte(`{"object":"data_source","id":"ds","properties":{"Visible":{"id":"p","name":"Hidden","type":"title"}}}`))
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{name: "object が異なる", body: `{"object":"database","id":"ds","properties":{}}`, want: "notion: GET /v1/data_sources/ds: invalid response: object must be data_source"},
+		{name: "object がない", body: `{"id":"ds","properties":{}}`, want: "notion: GET /v1/data_sources/ds: invalid response: object is required"},
+		{name: "id がない", body: `{"object":"data_source","properties":{}}`, want: "notion: GET /v1/data_sources/ds: invalid response: id is required"},
+		{name: "id が空", body: `{"object":"data_source","id":"","properties":{}}`, want: "notion: GET /v1/data_sources/ds: invalid response: id must not be empty"},
+		{name: "properties がない", body: `{"object":"data_source","id":"ds"}`, want: "notion: GET /v1/data_sources/ds: invalid response: properties is required"},
+		{name: "properties が null", body: `{"object":"data_source","id":"ds","properties":null}`, want: "notion: GET /v1/data_sources/ds: invalid response: properties is required"},
+		{name: "Property の id がない", body: `{"object":"data_source","id":"ds","properties":{"Name":{"name":"Name","type":"title"}}}`, want: `notion: GET /v1/data_sources/ds: invalid response: properties["Name"].id is required`},
+		{name: "Property の id が空", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"","name":"Name","type":"title"}}}`, want: `notion: GET /v1/data_sources/ds: invalid response: properties["Name"].id must not be empty`},
+		{name: "Property の name がない", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","type":"title"}}}`, want: `notion: GET /v1/data_sources/ds: invalid response: properties["Name"].name is required`},
+		{name: "Property の type がない", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","name":"Name"}}}`, want: `notion: GET /v1/data_sources/ds: invalid response: properties["Name"].type is required`},
+		{name: "Property の type が null", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","name":"Name","type":null}}}`, want: `notion: GET /v1/data_sources/ds: invalid response: properties["Name"].type is required`},
+		{name: "Property の type が空", body: `{"object":"data_source","id":"ds","properties":{"Name":{"id":"n","name":"Name","type":""}}}`, want: `notion: GET /v1/data_sources/ds: invalid response: properties["Name"].type must not be empty`},
+		{name: "key と name が異なる", body: `{"object":"data_source","id":"ds","properties":{"Visible":{"id":"n","name":"Hidden","type":"title"}}}`, want: `notion: GET /v1/data_sources/ds: invalid response: properties["Visible"]: name "Hidden" does not match key`},
+		{name: "Property の id が重複する", body: `{"object":"data_source","id":"ds","properties":{"Author":{"id":"same","name":"Author","type":"rich_text"},"Name":{"id":"same","name":"Name","type":"title"}}}`, want: "notion: GET /v1/data_sources/ds: invalid response: properties contains duplicate id"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tt.body))
+			})
+			_, err := client.RetrieveDataSource(context.Background(), "ds")
+			assertNotionError(t, err)
+			if got := err.Error(); got != tt.want {
+				t.Errorf("error = %q, want %q", got, tt.want)
+			}
 		})
-		_, err := client.RetrieveDataSource(context.Background(), "ds")
-		assertNotionError(t, err, "Visible", "Hidden")
-		if !strings.Contains(err.Error(), "does not match key") {
-			t.Errorf("error = %q, want key mismatch", err)
-		}
-	})
+	}
 }

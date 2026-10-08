@@ -43,6 +43,7 @@ type dataSourceResponse struct {
 	} `json:"properties"`
 }
 
+// RetrieveDatabase は GET /v1/databases/{id} を呼ぶ。失敗はすべて exitcode.Notion。
 func (c *Client) RetrieveDatabase(ctx context.Context, databaseID string) (*Database, error) {
 	path := "/v1/databases/" + url.PathEscape(databaseID)
 	var response databaseResponse
@@ -86,6 +87,7 @@ func (c *Client) RetrieveDatabase(ctx context.Context, databaseID string) (*Data
 	return database, nil
 }
 
+// RetrieveDataSource は GET /v1/data_sources/{id} を呼ぶ。Properties は Name の昇順。
 func (c *Client) RetrieveDataSource(ctx context.Context, dataSourceID string) (*DataSource, error) {
 	path := "/v1/data_sources/" + url.PathEscape(dataSourceID)
 	var response dataSourceResponse

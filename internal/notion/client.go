@@ -18,6 +18,7 @@ const (
 	notionVersion  = "2026-03-11"
 )
 
+// Client は Notion API を呼ぶクライアント。token は Authorization ヘッダにだけ使い、error には出さない。
 type Client struct {
 	token    string
 	baseURL  string
@@ -25,6 +26,7 @@ type Client struct {
 	redactor *redact.Redactor
 }
 
+// Option は Client の設定を表す。
 type Option func(*Client)
 
 // WithBaseURL は要求先を差し替える（テストの httptest サーバー向け）。
@@ -34,6 +36,7 @@ func WithBaseURL(u string) Option {
 	}
 }
 
+// New は Notion API クライアントを作る。
 func New(token string, opts ...Option) *Client {
 	c := &Client{
 		token:    token,

@@ -99,37 +99,37 @@ func TestErrors(t *testing.T) {
 		name       string
 		statusCode int
 		body       string
-		wantParts  []string
+		want       string
 	}{
 		{
 			name:       "認証エラー",
 			statusCode: http.StatusUnauthorized,
 			body:       `{"object":"error","status":401,"code":"unauthorized","message":"API token is invalid."}`,
-			wantParts:  []string{"HTTP 401", "unauthorized", "API token is invalid."},
+			want:       "notion: GET /v1/databases/db-1: HTTP 401 unauthorized: API token is invalid.",
 		},
 		{
 			name:       "対象なし",
 			statusCode: http.StatusNotFound,
 			body:       `{"object":"error","status":404,"code":"object_not_found","message":"Could not find database."}`,
-			wantParts:  []string{"HTTP 404", "object_not_found", "Could not find database."},
+			want:       "notion: GET /v1/databases/db-1: HTTP 404 object_not_found: Could not find database.",
 		},
 		{
 			name:       "サーバーエラー",
 			statusCode: http.StatusInternalServerError,
 			body:       `{"object":"error","status":500,"code":"internal_server_error","message":"Unexpected error."}`,
-			wantParts:  []string{"HTTP 500", "internal_server_error", "Unexpected error."},
+			want:       "notion: GET /v1/databases/db-1: HTTP 500 internal_server_error: Unexpected error.",
 		},
 		{
 			name:       "エラーメッセージ内のトークンを隠す",
 			statusCode: http.StatusUnauthorized,
 			body:       `{"code":"unauthorized","message":"bad token test-token-value"}`,
-			wantParts:  []string{"HTTP 401", "[REDACTED]"},
+			want:       "notion: GET /v1/databases/db-1: HTTP 401 unauthorized: bad token [REDACTED]",
 		},
 		{
 			name:       "JSON ではないエラー応答",
 			statusCode: http.StatusBadGateway,
 			body:       `<html>bad gateway</html>`,
-			wantParts:  []string{"HTTP 502"},
+			want:       "notion: GET /v1/databases/db-1: HTTP 502",
 		},
 	}
 	for _, tt := range tests {
@@ -140,9 +140,9 @@ func TestErrors(t *testing.T) {
 			})
 
 			_, err := client.RetrieveDatabase(context.Background(), "db-1")
-			assertNotionError(t, err, tt.wantParts...)
-			if tt.statusCode == http.StatusBadGateway && strings.Contains(err.Error(), "<html>") {
-				t.Errorf("error = %q, must not contain raw body", err)
+			assertNotionError(t, err)
+			if got := err.Error(); got != tt.want {
+				t.Errorf("error = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -176,5 +176,9 @@ func TestInvalidResponseJSON(t *testing.T) {
 	})
 
 	_, err := client.RetrieveDatabase(context.Background(), "db-1")
-	assertNotionError(t, err, "invalid response JSON")
+	assertNotionError(t, err)
+	const want = "notion: GET /v1/databases/db-1: invalid response JSON"
+	if got := err.Error(); got != want {
+		t.Errorf("error = %q, want %q", got, want)
+	}
 }
