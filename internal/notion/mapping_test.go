@@ -39,30 +39,30 @@ func TestCandidates(t *testing.T) {
 		{
 			name: "型が合う",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
-				{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
-				{ID: "Ab12", Name: "Author", Type: typeRichText},
-				{ID: "asin-id", Name: "ASIN", Type: typeRichText},
-				{ID: "date-id", Name: "Last Annotated At", Type: typeDate},
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
+				{ID: "Ab12", Name: "Author", Type: "rich_text"},
+				{ID: "asin-id", Name: "ASIN", Type: "rich_text"},
+				{ID: "date-id", Name: "Last Annotated At", Type: "date"},
 			},
 			want: map[Field][]Property{
-				FieldTitle: {{ID: "title-id", Name: "Name", Type: typeTitle}},
+				FieldTitle: {{ID: "title-id", Name: "Name", Type: "title"}},
 				FieldKindleID: {
-					{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
-					{ID: "Ab12", Name: "Author", Type: typeRichText},
-					{ID: "asin-id", Name: "ASIN", Type: typeRichText},
+					{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
+					{ID: "Ab12", Name: "Author", Type: "rich_text"},
+					{ID: "asin-id", Name: "ASIN", Type: "rich_text"},
 				},
 				FieldAuthor: {
-					{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
-					{ID: "Ab12", Name: "Author", Type: typeRichText},
-					{ID: "asin-id", Name: "ASIN", Type: typeRichText},
+					{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
+					{ID: "Ab12", Name: "Author", Type: "rich_text"},
+					{ID: "asin-id", Name: "ASIN", Type: "rich_text"},
 				},
 				FieldASIN: {
-					{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
-					{ID: "Ab12", Name: "Author", Type: typeRichText},
-					{ID: "asin-id", Name: "ASIN", Type: typeRichText},
+					{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
+					{ID: "Ab12", Name: "Author", Type: "rich_text"},
+					{ID: "asin-id", Name: "ASIN", Type: "rich_text"},
 				},
-				FieldLastAnnotatedAt: {{ID: "date-id", Name: "Last Annotated At", Type: typeDate}},
+				FieldLastAnnotatedAt: {{ID: "date-id", Name: "Last Annotated At", Type: "date"}},
 			},
 		},
 		{
@@ -113,11 +113,6 @@ func TestDefaultMapping(t *testing.T) {
 			want:  config.Mapping{Title: "title-id", KindleID: "%3Axs", Author: "Ab12", ASIN: "asin-id", LastAnnotatedAt: "date-id"},
 		},
 		{
-			name:  "kindle_id の表記揺れ: Kindle ID",
-			props: defaultProperties("Kindle ID", "Author", "ASIN", "Last Annotated At"),
-			want:  config.Mapping{Title: "title-id", KindleID: "%3Axs", Author: "Ab12", ASIN: "asin-id", LastAnnotatedAt: "date-id"},
-		},
-		{
 			name:  "kindle_id の表記揺れ: 小文字と空白",
 			props: defaultProperties("kindle id", "Author", "ASIN", "Last Annotated At"),
 			want:  config.Mapping{Title: "title-id", KindleID: "%3Axs", Author: "Ab12", ASIN: "asin-id", LastAnnotatedAt: "date-id"},
@@ -165,16 +160,16 @@ func TestDefaultMapping(t *testing.T) {
 		{
 			name: "title は名前に関係なく型で決まる",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
-				{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
 			},
 			want: config.Mapping{Title: "title-id", KindleID: "%3Axs"},
 		},
 		{
 			name: "既定名に一致する候補が無い",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
-				{ID: "book-id", Name: "Book ID", Type: typeRichText},
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "book-id", Name: "Book ID", Type: "rich_text"},
 			},
 			want:        config.Mapping{Title: "title-id"},
 			wantMissing: []Field{FieldKindleID},
@@ -182,9 +177,9 @@ func TestDefaultMapping(t *testing.T) {
 		{
 			name: "必須項目の既定名一致が複数",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
-				{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
-				{ID: "kindle-prop", Name: "kindle_id", Type: typeRichText},
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
+				{ID: "kindle-prop", Name: "kindle_id", Type: "rich_text"},
 			},
 			want:        config.Mapping{Title: "title-id"},
 			wantMissing: []Field{FieldKindleID},
@@ -192,17 +187,17 @@ func TestDefaultMapping(t *testing.T) {
 		{
 			name: "任意項目の既定名一致が複数",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
-				{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
-				{ID: "Ab12", Name: "Author", Type: typeRichText},
-				{ID: "author-ja", Name: "著者", Type: typeRichText},
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
+				{ID: "Ab12", Name: "Author", Type: "rich_text"},
+				{ID: "author-ja", Name: "著者", Type: "rich_text"},
 			},
 			want: config.Mapping{Title: "title-id", KindleID: "%3Axs"},
 		},
 		{
 			name: "型の合わない Property だけが名前一致",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
+				{ID: "title-id", Name: "Name", Type: "title"},
 				{ID: "kindle-number", Name: "Kindle ID", Type: "number"},
 			},
 			want:        config.Mapping{Title: "title-id"},
@@ -211,16 +206,16 @@ func TestDefaultMapping(t *testing.T) {
 		{
 			name: "型違いと型一致が同名正規化で一つずつ",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
+				{ID: "title-id", Name: "Name", Type: "title"},
 				{ID: "kindle-number", Name: "Kindle ID", Type: "number"},
-				{ID: "%3Axs", Name: "kindle_id", Type: typeRichText},
+				{ID: "%3Axs", Name: "kindle_id", Type: "rich_text"},
 			},
 			want: config.Mapping{Title: "title-id", KindleID: "%3Axs"},
 		},
 		{
 			name: "title 型が無い",
 			props: []Property{
-				{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
+				{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
 			},
 			want:        config.Mapping{KindleID: "%3Axs"},
 			wantMissing: []Field{FieldTitle},
@@ -228,7 +223,7 @@ func TestDefaultMapping(t *testing.T) {
 		{
 			name: "title と kindle_id が無い",
 			props: []Property{
-				{ID: "author-id", Name: "Author", Type: typeRichText},
+				{ID: "author-id", Name: "Author", Type: "rich_text"},
 			},
 			want:        config.Mapping{Author: "author-id"},
 			wantMissing: []Field{FieldTitle, FieldKindleID},
@@ -236,9 +231,9 @@ func TestDefaultMapping(t *testing.T) {
 		{
 			name: "title 型が複数",
 			props: []Property{
-				{ID: "title-id", Name: "Name", Type: typeTitle},
-				{ID: "title-id-2", Name: "Title", Type: typeTitle},
-				{ID: "%3Axs", Name: "Kindle ID", Type: typeRichText},
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "title-id-2", Name: "Title", Type: "title"},
+				{ID: "%3Axs", Name: "Kindle ID", Type: "rich_text"},
 			},
 			want:        config.Mapping{KindleID: "%3Axs"},
 			wantMissing: []Field{FieldTitle},
@@ -266,10 +261,10 @@ func TestDefaultMapping(t *testing.T) {
 
 func defaultProperties(kindleID, author, asin, lastAnnotatedAt string) []Property {
 	return []Property{
-		{ID: "title-id", Name: "Name", Type: typeTitle},
-		{ID: "%3Axs", Name: kindleID, Type: typeRichText},
-		{ID: "Ab12", Name: author, Type: typeRichText},
-		{ID: "asin-id", Name: asin, Type: typeRichText},
-		{ID: "date-id", Name: lastAnnotatedAt, Type: typeDate},
+		{ID: "title-id", Name: "Name", Type: "title"},
+		{ID: "%3Axs", Name: kindleID, Type: "rich_text"},
+		{ID: "Ab12", Name: author, Type: "rich_text"},
+		{ID: "asin-id", Name: asin, Type: "rich_text"},
+		{ID: "date-id", Name: lastAnnotatedAt, Type: "date"},
 	}
 }

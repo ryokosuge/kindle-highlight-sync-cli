@@ -7,13 +7,20 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/config"
 )
 
+// Field は Data Source の Property を対応させる項目（仕様書 §45）。
 type Field string
 
+// Field の値は config.toml の [notion.mapping] の key と同じ。
 const (
-	FieldTitle           Field = "title"
-	FieldKindleID        Field = "kindle_id"
-	FieldAuthor          Field = "author"
-	FieldASIN            Field = "asin"
+	// FieldTitle はタイトル項目を表す。
+	FieldTitle Field = "title"
+	// FieldKindleID は Kindle ID 項目を表す。
+	FieldKindleID Field = "kindle_id"
+	// FieldAuthor は著者項目を表す。
+	FieldAuthor Field = "author"
+	// FieldASIN は ASIN 項目を表す。
+	FieldASIN Field = "asin"
+	// FieldLastAnnotatedAt は最終注釈日時項目を表す。
 	FieldLastAnnotatedAt Field = "last_annotated_at"
 )
 
@@ -23,6 +30,7 @@ const (
 	typeDate     = "date"
 )
 
+// fields は §45 の順。
 var fields = []Field{
 	FieldTitle,
 	FieldKindleID,
@@ -31,6 +39,7 @@ var fields = []Field{
 	FieldLastAnnotatedAt,
 }
 
+// fieldTypes は §45 の型。
 var fieldTypes = map[Field]string{
 	FieldTitle:           typeTitle,
 	FieldKindleID:        typeRichText,
@@ -39,6 +48,7 @@ var fieldTypes = map[Field]string{
 	FieldLastAnnotatedAt: typeDate,
 }
 
+// defaultNames は既定名。title は名前ではなく型で決めるので持たない。
 var defaultNames = map[Field][]string{
 	FieldKindleID:        {"Kindle ID"},
 	FieldAuthor:          {"Author", "著者"},
@@ -46,10 +56,12 @@ var defaultNames = map[Field][]string{
 	FieldLastAnnotatedAt: {"Last Annotated At", "Last Annotated"},
 }
 
+// Required は title と kindle_id で true（§45）。
 func (f Field) Required() bool {
 	return f == FieldTitle || f == FieldKindleID
 }
 
+// normalizeName は大文字小文字・空白・'_'・'-' を無視して名前を比べるための形にする。
 func normalizeName(name string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) || r == '_' || r == '-' {
@@ -69,6 +81,7 @@ func matchesDefaultName(f Field, name string) bool {
 	return false
 }
 
+// Candidates は Field ごとに §45 の型が合う Property を props の順で返す。候補の無い Field は含まない。
 func Candidates(props []Property) map[Field][]Property {
 	candidates := make(map[Field][]Property)
 	for _, f := range fields {
@@ -81,6 +94,8 @@ func Candidates(props []Property) map[Field][]Property {
 	return candidates
 }
 
+// DefaultMapping は既定の対応（Property ID）と、既定が決まらなかった必須 Field（§45 の順）を返す。
+// title は title 型の Property がちょうど 1 つならそれ。他は型が合う候補のうち既定名に一致するものがちょうど 1 つならそれ。
 func DefaultMapping(props []Property) (config.Mapping, []Field) {
 	candidates := Candidates(props)
 	var mapping config.Mapping
