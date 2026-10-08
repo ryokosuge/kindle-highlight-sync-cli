@@ -8,18 +8,21 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 )
 
+// Problem は 1 つの項目についての不足か型違い。Property が nil なら不足（名前の一致も型の合う候補も無い）。
 type Problem struct {
 	Field    Field
-	Property *Property
-	Want     string
+	Property *Property // 名前が既定名に一致したが型が合わない Property
+	Want     string    // §45 の型（title / rich_text / date）
 }
 
+// MappingCheck は Data Source の Property を §45 と照らした結果。
 type MappingCheck struct {
-	Missing    []Problem
-	Mismatched []Problem
-	Skipped    []Problem
+	Missing    []Problem // 必須項目の不足
+	Mismatched []Problem // 必須項目の型違い
+	Skipped    []Problem // 任意項目の型違い（対応させない）
 }
 
+// CheckMapping は Data Source の Property を §45 と照らす。型の合う候補があって既定が決まらないだけの項目は問題にしない。
 func CheckMapping(props []Property) MappingCheck {
 	var check MappingCheck
 
@@ -57,6 +60,7 @@ func CheckMapping(props []Property) MappingCheck {
 	return check
 }
 
+// Err は Missing / Mismatched があれば exitcode.ConfigRequired の error を、無ければ nil を返す。文面は全件を "; " で区切った 1 行。
 func (c MappingCheck) Err() error {
 	var parts []string
 	for _, problem := range c.Missing {
@@ -72,6 +76,7 @@ func (c MappingCheck) Err() error {
 	return exitcode.New(exitcode.ConfigRequired, errors.New(strings.Join(parts, "; ")))
 }
 
+// SkippedLines は Skipped を 1 件 1 行の文面にして返す。
 func (c MappingCheck) SkippedLines() []string {
 	var lines []string
 	for _, problem := range c.Skipped {
