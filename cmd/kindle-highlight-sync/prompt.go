@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -37,6 +39,7 @@ func (p *prompter) line(question string) (string, error) {
 }
 
 // secret は入力が端末なら打った文字を画面に出さずに読み、端末でなければ 1 行として読む。
+// 端末で読む間に Ctrl-C を受けたら、端末を元に戻してから同じ SIGINT で終わる。
 func (p *prompter) secret(question string) (string, error) {
 	if _, err := fmt.Fprintf(p.out, "%s: ", question); err != nil {
 		return "", err
@@ -44,7 +47,26 @@ func (p *prompter) secret(question string) (string, error) {
 	if p.term == nil {
 		return p.readLine()
 	}
-	password, readErr := term.ReadPassword(int(p.term.Fd()))
+	fd := int(p.term.Fd())
+	state, err := term.GetState(fd)
+	if err != nil {
+		return "", err
+	}
+	interrupted := make(chan os.Signal, 1)
+	signal.Notify(interrupted, os.Interrupt)
+	defer signal.Stop(interrupted)
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-interrupted:
+			_ = term.Restore(fd, state)
+			signal.Reset(os.Interrupt)
+			_ = syscall.Kill(syscall.Getpid(), syscall.SIGINT)
+		case <-done:
+		}
+	}()
+	password, readErr := term.ReadPassword(fd)
 	_, writeErr := fmt.Fprintln(p.out)
 	if readErr != nil {
 		return "", readErr
