@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"time"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/redact"
@@ -25,6 +27,7 @@ type Client struct {
 	baseURL  string
 	http     *http.Client
 	redactor *redact.Redactor
+	retry    retryPolicy
 }
 
 // redactedError は token を隠したメッセージだけを公開する。原因は token を含みうるので Unwrap では返さず、
@@ -50,6 +53,25 @@ func WithBaseURL(u string) Option {
 	}
 }
 
+// WithLogWriter は再試行の待機ログの出力先を差し替える。既定は os.Stderr。
+func WithLogWriter(w io.Writer) Option {
+	return func(c *Client) {
+		c.retry.log = w
+	}
+}
+
+func withRetrySleep(f func(context.Context, time.Duration) error) Option {
+	return func(c *Client) {
+		c.retry.sleep = f
+	}
+}
+
+func withRetryJitter(f func() time.Duration) Option {
+	return func(c *Client) {
+		c.retry.jitter = f
+	}
+}
+
 // New は Notion API クライアントを作る。
 func New(token string, opts ...Option) *Client {
 	c := &Client{
@@ -61,6 +83,11 @@ func New(token string, opts ...Option) *Client {
 			},
 		},
 		redactor: redact.New(token),
+		retry: retryPolicy{
+			sleep:  sleepContext,
+			jitter: defaultJitter,
+			log:    os.Stderr,
+		},
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -82,17 +109,54 @@ func (c *Client) get(ctx context.Context, path string, v any) error {
 
 // do は Notion への要求の送信と応答の読み取りを 1 か所にまとめる。body が nil なら本文を送らない。
 func (c *Client) do(ctx context.Context, method, path string, body, v any) error {
-	var reqBody io.Reader
+	var encoded []byte
 	if body != nil {
-		encoded, err := json.Marshal(body)
+		var err error
+		encoded, err = json.Marshal(body)
 		if err != nil {
 			return c.notionError(method, path, err)
 		}
-		reqBody = bytes.NewReader(encoded)
+	}
+
+	for n := 1; ; n++ {
+		resp, respBody, err := c.send(ctx, method, path, encoded)
+		if err != nil {
+			return c.notionError(method, path, err)
+		}
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			if err := json.Unmarshal(respBody, v); err != nil {
+				return c.notionError(method, path, errors.New("invalid response JSON"))
+			}
+			return nil
+		}
+
+		statusErr := statusError(resp.StatusCode, respBody)
+		if !retryable(resp.StatusCode) {
+			return c.notionError(method, path, statusErr)
+		}
+		if n > maxRetries {
+			return c.notionError(method, path, fmt.Errorf("retry limit exceeded after %d retries: %w", maxRetries, statusErr))
+		}
+		secs, ok := parseRetryAfter(resp.Header.Get("Retry-After"))
+		if ok && secs > int(maxRetryAfter/time.Second) {
+			return c.notionError(method, path, fmt.Errorf("Retry-After %ds exceeds %ds limit: %w", secs, int(maxRetryAfter/time.Second), statusErr))
+		}
+		d := c.retry.waitFor(n, time.Duration(secs)*time.Second, ok)
+		c.retry.logWait(resp.StatusCode, n, d)
+		if err := c.retry.sleep(ctx, d); err != nil {
+			return c.notionError(method, path, err)
+		}
+	}
+}
+
+func (c *Client) send(ctx context.Context, method, path string, body []byte) (*http.Response, []byte, error) {
+	var reqBody io.Reader
+	if body != nil {
+		reqBody = bytes.NewReader(body)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
-		return c.notionError(method, path, err)
+		return nil, nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Notion-Version", notionVersion)
@@ -102,32 +166,29 @@ func (c *Client) do(ctx context.Context, method, path string, body, v any) error
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return c.notionError(method, path, err)
+		return nil, nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
-
 	respBody, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
 	if err != nil {
-		return c.notionError(method, path, err)
+		return nil, nil, err
 	}
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		var apiError struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
+	return resp, respBody, nil
+}
+
+func statusError(status int, body []byte) error {
+	var apiError struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	}
+	message := fmt.Sprintf("HTTP %d", status)
+	if json.Unmarshal(body, &apiError) == nil && apiError.Code != "" {
+		message += " " + apiError.Code
+		if apiError.Message != "" {
+			message += ": " + apiError.Message
 		}
-		message := fmt.Sprintf("HTTP %d", resp.StatusCode)
-		if json.Unmarshal(respBody, &apiError) == nil && apiError.Code != "" {
-			message += " " + apiError.Code
-			if apiError.Message != "" {
-				message += ": " + apiError.Message
-			}
-		}
-		return c.notionError(method, path, errors.New(message))
 	}
-	if err := json.Unmarshal(respBody, v); err != nil {
-		return c.notionError(method, path, errors.New("invalid response JSON"))
-	}
-	return nil
+	return errors.New(message)
 }
 
 func (c *Client) invalidResponse(method, path, format string, args ...any) error {

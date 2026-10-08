@@ -16,11 +16,11 @@ import (
 
 const testToken = "test-token-value"
 
-func newTestClient(t *testing.T, h http.HandlerFunc) *Client {
+func newTestClient(t *testing.T, h http.HandlerFunc, opts ...Option) *Client {
 	t.Helper()
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
-	return New(testToken, WithBaseURL(srv.URL))
+	return New(testToken, append([]Option{WithBaseURL(srv.URL)}, opts...)...)
 }
 
 func assertNotionError(t *testing.T, err error, wantParts ...string) {

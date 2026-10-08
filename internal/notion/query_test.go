@@ -230,12 +230,12 @@ func TestQueryDataSourceFailure(t *testing.T) {
 			want: "notion: POST /v1/data_sources/ds/query: HTTP 500 internal_server_error: Unexpected error.",
 		},
 		{
-			name: "途中で 429",
+			name: "途中で 400",
 			replies: []queryReply{
 				{body: firstQueryPage},
-				{status: http.StatusTooManyRequests, body: `{"object":"error","status":429,"code":"rate_limited","message":"Rate limited."}`},
+				{status: http.StatusBadRequest, body: `{"object":"error","status":400,"code":"bad_request","message":"Bad request."}`},
 			},
-			want: "notion: POST /v1/data_sources/ds/query: HTTP 429 rate_limited: Rate limited.",
+			want: "notion: POST /v1/data_sources/ds/query: HTTP 400 bad_request: Bad request.",
 		},
 		{
 			name: "3 回目で 2xx 以外",
