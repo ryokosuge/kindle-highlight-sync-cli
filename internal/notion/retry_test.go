@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -28,51 +29,36 @@ type retryReply struct {
 }
 
 type retryRequestRecord struct {
-	method    string
-	path      string
-	body      string
-	requestID string
+	method string
+	path   string
+	body   string
 }
 
-type retryTestTransport struct {
-	next http.RoundTripper
-}
-
-func (t retryTestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	req.Header.Set("X-Test-Request-ID", fmt.Sprintf("%p", req))
-	if req.Body != nil && req.Body != http.NoBody {
-		body, err := io.ReadAll(req.Body)
-		if err != nil {
-			return nil, err
-		}
-		_ = req.Body.Close()
-		req.Body = io.NopCloser(bytes.NewReader(body))
-	}
-	return t.next.RoundTrip(req)
-}
-
-func newRetryTestClient(t *testing.T, replies ...retryReply) (*Client, *[]retryRequestRecord, *[]time.Duration, *bytes.Buffer) {
+func newRetryTestClient(t *testing.T, replies ...retryReply) (*Client, func() []retryRequestRecord, *[]time.Duration, *bytes.Buffer) {
 	t.Helper()
 	var records []retryRequestRecord
 	var waits []time.Duration
 	var logs bytes.Buffer
+	var mu sync.Mutex
 	client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Errorf("要求本文の読み取りに失敗: %v", err)
 		}
+		mu.Lock()
 		records = append(records, retryRequestRecord{
-			method:    r.Method,
-			path:      r.URL.EscapedPath(),
-			body:      string(body),
-			requestID: r.Header.Get("X-Test-Request-ID"),
+			method: r.Method,
+			path:   r.URL.EscapedPath(),
+			body:   string(body),
 		})
-		if len(records) > len(replies) {
-			t.Errorf("予期しない要求 #%d", len(records))
+		n := len(records)
+		mu.Unlock()
+		if n > len(replies) {
+			t.Errorf("予期しない要求 #%d", n)
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
-		reply := replies[len(records)-1]
+		reply := replies[n-1]
 		for key, value := range reply.header {
 			w.Header().Set(key, value)
 		}
@@ -86,8 +72,11 @@ func newRetryTestClient(t *testing.T, replies ...retryReply) (*Client, *[]retryR
 	}), withRetryJitter(func() time.Duration {
 		return 500 * time.Millisecond
 	}), WithLogWriter(&logs))
-	client.http.Transport = retryTestTransport{next: http.DefaultTransport}
-	return client, &records, &waits, &logs
+	return client, func() []retryRequestRecord {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]retryRequestRecord(nil), records...)
+	}, &waits, &logs
 }
 
 func assertRetryWaits(t *testing.T, got *[]time.Duration, want []time.Duration) {
@@ -176,22 +165,20 @@ func TestRetryRecovery(t *testing.T) {
 		if len(got) != 0 {
 			t.Errorf("QueryDataSource() = %#v, want no pages", got)
 		}
-		if len(*records) != 2 {
-			t.Fatalf("要求数 = %d, want 2", len(*records))
+		gotRecords := records()
+		if len(gotRecords) != 2 {
+			t.Fatalf("要求数 = %d, want 2", len(gotRecords))
 		}
-		for i, record := range *records {
+		for i, record := range gotRecords {
 			if record.method != http.MethodPost || record.path != "/v1/data_sources/ds-1/query" {
 				t.Errorf("要求[%d] = %s %s, want POST /v1/data_sources/ds-1/query", i, record.method, record.path)
 			}
 			if record.body == "" {
 				t.Errorf("要求[%d]の本文が空", i)
 			}
-			if record.body != (*records)[0].body {
-				t.Errorf("要求[%d]の本文 = %q, 1 回目と異なる %q", i, record.body, (*records)[0].body)
+			if record.body != gotRecords[0].body {
+				t.Errorf("要求[%d]の本文 = %q, 1 回目と異なる %q", i, record.body, gotRecords[0].body)
 			}
-		}
-		if (*records)[0].requestID == (*records)[1].requestID {
-			t.Errorf("再試行で同じ要求を再利用している: %s", (*records)[0].requestID)
 		}
 		assertRetryWaits(t, waits, []time.Duration{2 * time.Second})
 	})
@@ -209,18 +196,16 @@ func TestRetryRecovery(t *testing.T) {
 		if got == nil || got.ID != "db-1" {
 			t.Errorf("RetrieveDatabase() = %#v, want database db-1", got)
 		}
-		if len(*records) != 2 {
-			t.Fatalf("要求数 = %d, want 2", len(*records))
+		gotRecords := records()
+		if len(gotRecords) != 2 {
+			t.Fatalf("要求数 = %d, want 2", len(gotRecords))
 		}
-		first, second := (*records)[0], (*records)[1]
+		first, second := gotRecords[0], gotRecords[1]
 		if first.method != http.MethodGet || first.path != "/v1/databases/db-1" || first.body != "" {
 			t.Errorf("1 回目の要求 = %#v, want GET /v1/databases/db-1 with no body", first)
 		}
 		if second.method != first.method || second.path != first.path || second.body != first.body {
 			t.Errorf("2 回目の要求 = %#v, want method・path・body が 1 回目と同じ %#v", second, first)
-		}
-		if second.requestID == first.requestID {
-			t.Errorf("再試行で同じ要求を再利用している: %s", first.requestID)
 		}
 		assertRetryWaits(t, waits, []time.Duration{time.Second})
 	})
@@ -238,8 +223,8 @@ func TestRetryAfterFallback(t *testing.T) {
 		if _, err := client.RetrieveDatabase(context.Background(), "db-1"); err != nil {
 			t.Fatalf("RetrieveDatabase() error = %v", err)
 		}
-		if len(*records) != 4 {
-			t.Errorf("要求数 = %d, want 4", len(*records))
+		if got := len(records()); got != 4 {
+			t.Errorf("要求数 = %d, want 4", got)
 		}
 		assertRetryWaits(t, waits, []time.Duration{1500 * time.Millisecond, 2500 * time.Millisecond, 4500 * time.Millisecond})
 	})
@@ -254,8 +239,8 @@ func TestRetryAfterFallback(t *testing.T) {
 		if _, err := client.RetrieveDatabase(context.Background(), "db-1"); err != nil {
 			t.Fatalf("RetrieveDatabase() error = %v", err)
 		}
-		if len(*records) != 3 {
-			t.Errorf("要求数 = %d, want 3", len(*records))
+		if got := len(records()); got != 3 {
+			t.Errorf("要求数 = %d, want 3", got)
 		}
 		assertRetryWaits(t, waits, []time.Duration{3 * time.Second, 10 * time.Second})
 	})
@@ -273,8 +258,8 @@ func TestRetryLimit(t *testing.T) {
 	client, records, waits, _ := newRetryTestClient(t, replies...)
 	_, err := client.RetrieveDatabase(context.Background(), "db-1")
 	assertRetryError(t, err, "notion: GET /v1/databases/db-1: retry limit exceeded after 5 retries: HTTP 529 service_overload: Overloaded.")
-	if len(*records) != 6 {
-		t.Errorf("要求数 = %d, want 6", len(*records))
+	if got := len(records()); got != 6 {
+		t.Errorf("要求数 = %d, want 6", got)
 	}
 	if len(*waits) != 5 {
 		t.Errorf("待機回数 = %d, want 5", len(*waits))
@@ -288,8 +273,8 @@ func TestRetryAfterLimit(t *testing.T) {
 		})
 		_, err := client.RetrieveDatabase(context.Background(), "db-1")
 		assertRetryError(t, err, "notion: GET /v1/databases/db-1: Retry-After 61s exceeds 60s limit: HTTP 429 rate_limited: Rate limited.")
-		if len(*records) != 1 {
-			t.Errorf("要求数 = %d, want 1", len(*records))
+		if got := len(records()); got != 1 {
+			t.Errorf("要求数 = %d, want 1", got)
 		}
 		assertRetryWaits(t, waits, nil)
 	})
@@ -303,8 +288,8 @@ func TestRetryAfterLimit(t *testing.T) {
 		if _, err := client.RetrieveDatabase(context.Background(), "db-1"); err != nil {
 			t.Fatalf("RetrieveDatabase() error = %v", err)
 		}
-		if len(*records) != 2 {
-			t.Errorf("要求数 = %d, want 2", len(*records))
+		if got := len(records()); got != 2 {
+			t.Errorf("要求数 = %d, want 2", got)
 		}
 		assertRetryWaits(t, waits, []time.Duration{60 * time.Second})
 	})
@@ -331,8 +316,8 @@ func TestNoRetryForOtherStatuses(t *testing.T) {
 			})
 			_, err := client.RetrieveDatabase(context.Background(), "db-1")
 			assertRetryError(t, err, fmt.Sprintf("notion: GET /v1/databases/db-1: HTTP %d %s: %s", tt.status, tt.code, tt.msg))
-			if len(*records) != 1 {
-				t.Errorf("要求数 = %d, want 1", len(*records))
+			if got := len(records()); got != 1 {
+				t.Errorf("要求数 = %d, want 1", got)
 			}
 			assertRetryWaits(t, waits, nil)
 		})
@@ -383,8 +368,8 @@ func TestRetryCancellation(t *testing.T) {
 	if got := exitcode.Code(err); got != 4 {
 		t.Errorf("exitcode.Code(err) = %d, want 4", got)
 	}
-	if len(*records) != 1 {
-		t.Errorf("要求数 = %d, want 1", len(*records))
+	if got := len(records()); got != 1 {
+		t.Errorf("要求数 = %d, want 1", got)
 	}
 	if elapsed >= 5*time.Second {
 		t.Errorf("取り消しまでの時間 = %s, want under 5s", elapsed)

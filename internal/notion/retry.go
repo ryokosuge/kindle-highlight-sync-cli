@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"net/http"
 	"strconv"
 	"time"
 )
@@ -25,7 +26,7 @@ type retryPolicy struct {
 }
 
 func retryable(status int) bool {
-	return status == 429 || status == statusServiceOverload
+	return status == http.StatusTooManyRequests || status == statusServiceOverload
 }
 
 func parseRetryAfter(v string) (secs int, ok bool) {
