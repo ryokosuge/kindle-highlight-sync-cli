@@ -26,14 +26,18 @@ type Client struct {
 	redactor *redact.Redactor
 }
 
-// redactedError は token を隠したメッセージを持ち、errors.Is のために元の error を Unwrap で返す。
+// redactedError は token を隠したメッセージだけを公開する。原因は token を含みうるので Unwrap では返さず、
+// 呼び出し側の取り消し判定に要る context.Canceled / context.DeadlineExceeded の errors.Is だけを委譲する。
 type redactedError struct {
 	message string
-	err     error
+	cause   error
 }
 
 func (e *redactedError) Error() string { return e.message }
-func (e *redactedError) Unwrap() error { return e.err }
+
+func (e *redactedError) Is(target error) bool {
+	return (target == context.Canceled || target == context.DeadlineExceeded) && errors.Is(e.cause, target)
+}
 
 // Option は Client の設定を表す。
 type Option func(*Client)
@@ -67,7 +71,7 @@ func New(token string, opts ...Option) *Client {
 func (c *Client) notionError(path string, err error) error {
 	return exitcode.New(exitcode.Notion, &redactedError{
 		message: c.redactor.String(fmt.Sprintf("notion: GET %s: %v", path, err)),
-		err:     err,
+		cause:   err,
 	})
 }
 

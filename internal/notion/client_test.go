@@ -5,9 +5,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 )
@@ -224,6 +226,58 @@ func TestCanceledContext(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("errors.Is(err, context.Canceled) = false, err = %v", err)
 	}
+}
+
+func TestDeadlineExceeded(t *testing.T) {
+	client := newTestClient(t, func(http.ResponseWriter, *http.Request) {})
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	_, err := client.RetrieveDatabase(ctx, "db-1")
+	assertNotionError(t, err, "notion: GET /v1/databases/db-1")
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("errors.Is(err, context.DeadlineExceeded) = false, err = %v", err)
+	}
+}
+
+func TestErrorChainDoesNotContainToken(t *testing.T) {
+	t.Run("通信失敗", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		baseURL := srv.URL
+		srv.Close()
+
+		client := New(testToken, WithBaseURL(baseURL))
+		_, err := client.RetrieveDatabase(context.Background(), testToken)
+		assertNotionError(t, err)
+		for e := err; e != nil; e = errors.Unwrap(e) {
+			if strings.Contains(e.Error(), testToken) {
+				t.Errorf("error chain contains token: %q", e)
+			}
+		}
+		if errors.As(err, new(*url.Error)) {
+			t.Error("errors.As(err, new(*url.Error)) = true, want false")
+		}
+	})
+
+	t.Run("取り消し", func(t *testing.T) {
+		client := newTestClient(t, func(http.ResponseWriter, *http.Request) {})
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := client.RetrieveDatabase(ctx, testToken)
+		assertNotionError(t, err)
+		for e := err; e != nil; e = errors.Unwrap(e) {
+			if strings.Contains(e.Error(), testToken) {
+				t.Errorf("error chain contains token: %q", e)
+			}
+		}
+		if errors.As(err, new(*url.Error)) {
+			t.Error("errors.As(err, new(*url.Error)) = true, want false")
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("errors.Is(err, context.Canceled) = false, err = %v", err)
+		}
+	})
 }
 
 func TestBodyReadFailure(t *testing.T) {
