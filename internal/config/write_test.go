@@ -38,6 +38,22 @@ func dirEntries(t *testing.T, dir string) []string {
 	return names
 }
 
+// canCreate は dir に実際にファイルを作れるかを確かめ、作れたら消して true を返す。
+func canCreate(t *testing.T, dir string) bool {
+	t.Helper()
+	f, err := os.CreateTemp(dir, "probe-*")
+	if err != nil {
+		return false
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(f.Name()); err != nil {
+		t.Fatal(err)
+	}
+	return true
+}
+
 func TestSave(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "kindle-highlight-sync", "config.toml")
 	cfg := testConfig
@@ -191,6 +207,9 @@ func TestSaveError(t *testing.T) {
 				t.Error(err)
 			}
 		})
+		if canCreate(t, dir) {
+			t.Skip("権限を無視して書き込めるプロセス（root など）では、書き込めないディレクトリを作れない")
+		}
 		cfg := testConfig
 
 		if err := Save(path, &cfg); err == nil {
