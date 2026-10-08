@@ -97,9 +97,9 @@ func TestQueryDataSource(t *testing.T) {
 		}
 
 		wantBodies := []map[string]any{
-			{"page_size": float64(100)},
-			{"page_size": float64(100), "start_cursor": "cursor-1"},
-			{"page_size": float64(100), "start_cursor": "cursor-2"},
+			{"page_size": float64(100), "result_type": "page"},
+			{"page_size": float64(100), "result_type": "page", "start_cursor": "cursor-1"},
+			{"page_size": float64(100), "result_type": "page", "start_cursor": "cursor-2"},
 		}
 		records := requests()
 		if len(records) != len(wantBodies) {
@@ -245,6 +245,23 @@ func TestQueryDataSourceFailure(t *testing.T) {
 				{status: http.StatusServiceUnavailable, body: `{"object":"error","status":503,"code":"service_unavailable","message":"Unavailable."}`},
 			},
 			want: "notion: POST /v1/data_sources/ds/query: HTTP 503 service_unavailable: Unavailable.",
+		},
+		{
+			name: "直前と同じ next_cursor",
+			replies: []queryReply{
+				{body: firstQueryPage},
+				{body: `{"object":"list","results":[{"object":"page","id":"page-2","properties":{}}],"has_more":true,"next_cursor":"cursor-1"}`},
+			},
+			want: "notion: POST /v1/data_sources/ds/query: invalid response: next_cursor was already used",
+		},
+		{
+			name: "前に使った next_cursor",
+			replies: []queryReply{
+				{body: firstQueryPage},
+				{body: `{"object":"list","results":[],"has_more":true,"next_cursor":"cursor-2"}`},
+				{body: `{"object":"list","results":[],"has_more":true,"next_cursor":"cursor-1"}`},
+			},
+			want: "notion: POST /v1/data_sources/ds/query: invalid response: next_cursor was already used",
 		},
 		{
 			name: "途中で JSON ではない応答",

@@ -10,7 +10,10 @@ import (
 	"sort"
 )
 
-const queryPageSize = 100
+const (
+	queryPageSize   = 100
+	queryResultType = "page"
+)
 
 // Page は Query a data source の応答の page のうち照合に使う部分。Properties の key は Property ID。
 type Page struct {
@@ -28,6 +31,7 @@ type PropertyValue struct {
 
 type queryRequest struct {
 	PageSize    int    `json:"page_size"`
+	ResultType  string `json:"result_type"`
 	StartCursor string `json:"start_cursor,omitempty"`
 }
 
@@ -61,11 +65,13 @@ type richTextResponse struct {
 }
 
 // QueryDataSource は POST /v1/data_sources/{id}/query を next_cursor が尽きるまで呼び、全ページを返す。
-// 途中の要求の失敗や request_status の incomplete では一覧を返さない。失敗はすべて exitcode.Notion。
+// result_type で結果をページだけに絞る。途中の要求の失敗、request_status の incomplete、
+// 一度使った next_cursor の再出現では一覧を返さない。失敗はすべて exitcode.Notion。
 func (c *Client) QueryDataSource(ctx context.Context, dataSourceID string) ([]Page, error) {
 	path := "/v1/data_sources/" + url.PathEscape(dataSourceID) + "/query"
 	var pages []Page
-	request := queryRequest{PageSize: queryPageSize}
+	request := queryRequest{PageSize: queryPageSize, ResultType: queryResultType}
+	usedCursors := make(map[string]struct{})
 	for {
 		var response queryResponse
 		if err := c.do(ctx, http.MethodPost, path, request, &response); err != nil {
@@ -79,6 +85,10 @@ func (c *Client) QueryDataSource(ctx context.Context, dataSourceID string) ([]Pa
 		if nextCursor == "" {
 			return pages, nil
 		}
+		if _, ok := usedCursors[nextCursor]; ok {
+			return nil, c.invalidResponse(http.MethodPost, path, "next_cursor was already used")
+		}
+		usedCursors[nextCursor] = struct{}{}
 		request.StartCursor = nextCursor
 	}
 }
