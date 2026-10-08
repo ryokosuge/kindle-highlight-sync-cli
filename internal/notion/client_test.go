@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
@@ -97,39 +98,52 @@ func TestHeaders(t *testing.T) {
 func TestErrors(t *testing.T) {
 	tests := []struct {
 		name       string
+		id         string
 		statusCode int
 		body       string
 		want       string
 	}{
 		{
 			name:       "認証エラー",
+			id:         "db-1",
 			statusCode: http.StatusUnauthorized,
 			body:       `{"object":"error","status":401,"code":"unauthorized","message":"API token is invalid."}`,
 			want:       "notion: GET /v1/databases/db-1: HTTP 401 unauthorized: API token is invalid.",
 		},
 		{
 			name:       "対象なし",
+			id:         "db-1",
 			statusCode: http.StatusNotFound,
 			body:       `{"object":"error","status":404,"code":"object_not_found","message":"Could not find database."}`,
 			want:       "notion: GET /v1/databases/db-1: HTTP 404 object_not_found: Could not find database.",
 		},
 		{
 			name:       "サーバーエラー",
+			id:         "db-1",
 			statusCode: http.StatusInternalServerError,
 			body:       `{"object":"error","status":500,"code":"internal_server_error","message":"Unexpected error."}`,
 			want:       "notion: GET /v1/databases/db-1: HTTP 500 internal_server_error: Unexpected error.",
 		},
 		{
 			name:       "エラーメッセージ内のトークンを隠す",
+			id:         "db-1",
 			statusCode: http.StatusUnauthorized,
 			body:       `{"code":"unauthorized","message":"bad token test-token-value"}`,
 			want:       "notion: GET /v1/databases/db-1: HTTP 401 unauthorized: bad token [REDACTED]",
 		},
 		{
 			name:       "JSON ではないエラー応答",
+			id:         "db-1",
 			statusCode: http.StatusBadGateway,
 			body:       `<html>bad gateway</html>`,
 			want:       "notion: GET /v1/databases/db-1: HTTP 502",
+		},
+		{
+			name:       "ID の token を隠す",
+			id:         testToken,
+			statusCode: http.StatusNotFound,
+			body:       `{"code":"object_not_found","message":"Could not find database."}`,
+			want:       "notion: GET /v1/databases/[REDACTED]: HTTP 404 object_not_found: Could not find database.",
 		},
 	}
 	for _, tt := range tests {
@@ -139,10 +153,46 @@ func TestErrors(t *testing.T) {
 				_, _ = w.Write([]byte(tt.body))
 			})
 
-			_, err := client.RetrieveDatabase(context.Background(), "db-1")
+			_, err := client.RetrieveDatabase(context.Background(), tt.id)
 			assertNotionError(t, err)
 			if got := err.Error(); got != tt.want {
 				t.Errorf("error = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRedirect(t *testing.T) {
+	tests := []struct {
+		name       string
+		statusCode int
+	}{
+		{name: "301", statusCode: http.StatusMovedPermanently},
+		{name: "302", statusCode: http.StatusFound},
+		{name: "307", statusCode: http.StatusTemporaryRedirect},
+		{name: "308", statusCode: http.StatusPermanentRedirect},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var movedHit atomic.Bool
+			client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/moved" {
+					movedHit.Store(true)
+					_, _ = w.Write([]byte(`{"object":"database","id":"db-1","data_sources":[]}`))
+					return
+				}
+				w.Header().Set("Location", "/moved")
+				w.WriteHeader(tt.statusCode)
+			})
+
+			_, err := client.RetrieveDatabase(context.Background(), "db-1")
+			assertNotionError(t, err)
+			want := "notion: GET /v1/databases/db-1: HTTP " + tt.name
+			if got := err.Error(); got != want {
+				t.Errorf("error = %q, want %q", got, want)
+			}
+			if movedHit.Load() {
+				t.Error("redirect target was requested")
 			}
 		})
 	}
@@ -154,8 +204,14 @@ func TestConnectionFailure(t *testing.T) {
 	srv.Close()
 
 	client := New(testToken, WithBaseURL(baseURL))
-	_, err := client.RetrieveDatabase(context.Background(), "db-1")
-	assertNotionError(t, err, "notion: GET /v1/databases/db-1")
+	t.Run("通信できない", func(t *testing.T) {
+		_, err := client.RetrieveDatabase(context.Background(), "db-1")
+		assertNotionError(t, err, "notion: GET /v1/databases/db-1")
+	})
+	t.Run("ID の token を隠す", func(t *testing.T) {
+		_, err := client.RetrieveDatabase(context.Background(), testToken)
+		assertNotionError(t, err, "notion: GET /v1/databases/[REDACTED]: ")
+	})
 }
 
 func TestCanceledContext(t *testing.T) {
@@ -170,15 +226,69 @@ func TestCanceledContext(t *testing.T) {
 	}
 }
 
-func TestInvalidResponseJSON(t *testing.T) {
+func TestBodyReadFailure(t *testing.T) {
 	client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "100")
 		_, _ = w.Write([]byte(`{"object":`))
 	})
 
-	_, err := client.RetrieveDatabase(context.Background(), "db-1")
-	assertNotionError(t, err)
-	const want = "notion: GET /v1/databases/db-1: invalid response JSON"
-	if got := err.Error(); got != want {
-		t.Errorf("error = %q, want %q", got, want)
+	_, err := client.RetrieveDatabase(context.Background(), testToken)
+	assertNotionError(t, err, "notion: GET /v1/databases/[REDACTED]: ", "unexpected EOF")
+}
+
+func TestInvalidResponseJSON(t *testing.T) {
+	tests := []struct {
+		name string
+		id   string
+		want string
+	}{
+		{
+			name: "通常の ID",
+			id:   "db-1",
+			want: "notion: GET /v1/databases/db-1: invalid response JSON",
+		},
+		{
+			name: "ID の token を隠す",
+			id:   testToken,
+			want: "notion: GET /v1/databases/[REDACTED]: invalid response JSON",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(`{"object":`))
+			})
+			_, err := client.RetrieveDatabase(context.Background(), tt.id)
+			assertNotionError(t, err)
+			if got := err.Error(); got != tt.want {
+				t.Errorf("error = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInvalidResponseRedactsToken(t *testing.T) {
+	t.Run("ID の token を隠す", func(t *testing.T) {
+		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"object":"page","id":"x","data_sources":[]}`))
+		})
+		_, err := client.RetrieveDatabase(context.Background(), testToken)
+		assertNotionError(t, err)
+		const want = "notion: GET /v1/databases/[REDACTED]: invalid response: object must be database"
+		if got := err.Error(); got != want {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("応答中の token を隠す", func(t *testing.T) {
+		client := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"object":"data_source","id":"ds","properties":{"test-token-value":{"id":"n","name":"Other","type":"title"}}}`))
+		})
+		_, err := client.RetrieveDataSource(context.Background(), "ds")
+		assertNotionError(t, err)
+		const want = `notion: GET /v1/data_sources/ds: invalid response: properties["[REDACTED]"]: name "Other" does not match key`
+		if got := err.Error(); got != want {
+			t.Errorf("error = %q, want %q", got, want)
+		}
+	})
 }

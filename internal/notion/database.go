@@ -51,35 +51,35 @@ func (c *Client) RetrieveDatabase(ctx context.Context, databaseID string) (*Data
 		return nil, err
 	}
 	if response.Object == nil {
-		return nil, invalidResponse(path, "object is required")
+		return nil, c.invalidResponse(path, "object is required")
 	}
 	if *response.Object != "database" {
-		return nil, invalidResponse(path, "object must be database")
+		return nil, c.invalidResponse(path, "object must be database")
 	}
 	if response.ID == nil {
-		return nil, invalidResponse(path, "id is required")
+		return nil, c.invalidResponse(path, "id is required")
 	}
 	if *response.ID == "" {
-		return nil, invalidResponse(path, "id must not be empty")
+		return nil, c.invalidResponse(path, "id must not be empty")
 	}
 	if response.DataSources == nil {
-		return nil, invalidResponse(path, "data_sources is required")
+		return nil, c.invalidResponse(path, "data_sources is required")
 	}
 
 	database := &Database{ID: *response.ID}
 	seen := make(map[string]struct{}, len(*response.DataSources))
 	for i, ref := range *response.DataSources {
 		if ref.ID == nil {
-			return nil, invalidResponse(path, "data_sources[%d].id is required", i)
+			return nil, c.invalidResponse(path, "data_sources[%d].id is required", i)
 		}
 		if *ref.ID == "" {
-			return nil, invalidResponse(path, "data_sources[%d].id must not be empty", i)
+			return nil, c.invalidResponse(path, "data_sources[%d].id must not be empty", i)
 		}
 		if ref.Name == nil {
-			return nil, invalidResponse(path, "data_sources[%d].name is required", i)
+			return nil, c.invalidResponse(path, "data_sources[%d].name is required", i)
 		}
 		if _, ok := seen[*ref.ID]; ok {
-			return nil, invalidResponse(path, "data_sources contains duplicate id")
+			return nil, c.invalidResponse(path, "data_sources contains duplicate id")
 		}
 		seen[*ref.ID] = struct{}{}
 		database.DataSources = append(database.DataSources, DataSourceRef{ID: *ref.ID, Name: *ref.Name})
@@ -95,19 +95,19 @@ func (c *Client) RetrieveDataSource(ctx context.Context, dataSourceID string) (*
 		return nil, err
 	}
 	if response.Object == nil {
-		return nil, invalidResponse(path, "object is required")
+		return nil, c.invalidResponse(path, "object is required")
 	}
 	if *response.Object != "data_source" {
-		return nil, invalidResponse(path, "object must be data_source")
+		return nil, c.invalidResponse(path, "object must be data_source")
 	}
 	if response.ID == nil {
-		return nil, invalidResponse(path, "id is required")
+		return nil, c.invalidResponse(path, "id is required")
 	}
 	if *response.ID == "" {
-		return nil, invalidResponse(path, "id must not be empty")
+		return nil, c.invalidResponse(path, "id must not be empty")
 	}
 	if response.Properties == nil {
-		return nil, invalidResponse(path, "properties is required")
+		return nil, c.invalidResponse(path, "properties is required")
 	}
 
 	dataSource := &DataSource{ID: *response.ID}
@@ -120,25 +120,25 @@ func (c *Client) RetrieveDataSource(ctx context.Context, dataSourceID string) (*
 	for _, key := range keys {
 		property := (*response.Properties)[key]
 		if property.ID == nil {
-			return nil, invalidResponse(path, "properties[%q].id is required", key)
+			return nil, c.invalidResponse(path, "properties[%q].id is required", key)
 		}
 		if *property.ID == "" {
-			return nil, invalidResponse(path, "properties[%q].id must not be empty", key)
+			return nil, c.invalidResponse(path, "properties[%q].id must not be empty", key)
 		}
 		if property.Name == nil {
-			return nil, invalidResponse(path, "properties[%q].name is required", key)
+			return nil, c.invalidResponse(path, "properties[%q].name is required", key)
 		}
 		if property.Type == nil {
-			return nil, invalidResponse(path, "properties[%q].type is required", key)
+			return nil, c.invalidResponse(path, "properties[%q].type is required", key)
 		}
 		if *property.Type == "" {
-			return nil, invalidResponse(path, "properties[%q].type must not be empty", key)
+			return nil, c.invalidResponse(path, "properties[%q].type must not be empty", key)
 		}
 		if key != *property.Name {
-			return nil, invalidResponse(path, "properties[%q]: name %q does not match key", key, *property.Name)
+			return nil, c.invalidResponse(path, "properties[%q]: name %q does not match key", key, *property.Name)
 		}
 		if _, ok := seen[*property.ID]; ok {
-			return nil, invalidResponse(path, "properties contains duplicate id")
+			return nil, c.invalidResponse(path, "properties contains duplicate id")
 		}
 		seen[*property.ID] = struct{}{}
 		dataSource.Properties = append(dataSource.Properties, Property{

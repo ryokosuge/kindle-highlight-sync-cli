@@ -26,6 +26,15 @@ type Client struct {
 	redactor *redact.Redactor
 }
 
+// redactedError は token を隠したメッセージを持ち、errors.Is のために元の error を Unwrap で返す。
+type redactedError struct {
+	message string
+	err     error
+}
+
+func (e *redactedError) Error() string { return e.message }
+func (e *redactedError) Unwrap() error { return e.err }
+
 // Option は Client の設定を表す。
 type Option func(*Client)
 
@@ -39,9 +48,13 @@ func WithBaseURL(u string) Option {
 // New は Notion API クライアントを作る。
 func New(token string, opts ...Option) *Client {
 	c := &Client{
-		token:    token,
-		baseURL:  defaultBaseURL,
-		http:     &http.Client{},
+		token:   token,
+		baseURL: defaultBaseURL,
+		http: &http.Client{
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 		redactor: redact.New(token),
 	}
 	for _, opt := range opts {
@@ -50,45 +63,52 @@ func New(token string, opts ...Option) *Client {
 	return c
 }
 
+// notionError は Client が返す error の唯一の出口。メッセージは必ず redactor を通す。
+func (c *Client) notionError(path string, err error) error {
+	return exitcode.New(exitcode.Notion, &redactedError{
+		message: c.redactor.String(fmt.Sprintf("notion: GET %s: %v", path, err)),
+		err:     err,
+	})
+}
+
 func (c *Client) get(ctx context.Context, path string, v any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
-		return exitcode.New(exitcode.Notion, fmt.Errorf("notion: GET %s: %w", path, err))
+		return c.notionError(path, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Notion-Version", notionVersion)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return exitcode.New(exitcode.Notion, fmt.Errorf("notion: GET %s: %w", path, err))
+		return c.notionError(path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return exitcode.New(exitcode.Notion, fmt.Errorf("notion: GET %s: %w", path, err))
+		return c.notionError(path, err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiError struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		}
-		message := fmt.Sprintf("notion: GET %s: HTTP %d", path, resp.StatusCode)
+		message := fmt.Sprintf("HTTP %d", resp.StatusCode)
 		if json.Unmarshal(body, &apiError) == nil && apiError.Code != "" {
 			message += " " + apiError.Code
 			if apiError.Message != "" {
 				message += ": " + apiError.Message
 			}
 		}
-		return exitcode.New(exitcode.Notion, errors.New(c.redactor.String(message)))
+		return c.notionError(path, errors.New(message))
 	}
 	if err := json.Unmarshal(body, v); err != nil {
-		return exitcode.New(exitcode.Notion, errors.New("notion: GET "+path+": invalid response JSON"))
+		return c.notionError(path, errors.New("invalid response JSON"))
 	}
 	return nil
 }
 
-func invalidResponse(path, format string, args ...any) error {
-	messageArgs := append([]any{path}, args...)
-	return exitcode.New(exitcode.Notion, fmt.Errorf("notion: GET %s: invalid response: "+format, messageArgs...))
+func (c *Client) invalidResponse(path, format string, args ...any) error {
+	return c.notionError(path, fmt.Errorf("invalid response: "+format, args...))
 }
