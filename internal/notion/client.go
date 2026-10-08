@@ -2,6 +2,7 @@
 package notion
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -68,30 +69,46 @@ func New(token string, opts ...Option) *Client {
 }
 
 // notionError は Client が返す error の唯一の出口。メッセージは必ず redactor を通す。
-func (c *Client) notionError(path string, err error) error {
+func (c *Client) notionError(method, path string, err error) error {
 	return exitcode.New(exitcode.Notion, &redactedError{
-		message: c.redactor.String(fmt.Sprintf("notion: GET %s: %v", path, err)),
+		message: c.redactor.String(fmt.Sprintf("notion: %s %s: %v", method, path, err)),
 		cause:   err,
 	})
 }
 
 func (c *Client) get(ctx context.Context, path string, v any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	return c.do(ctx, http.MethodGet, path, nil, v)
+}
+
+// do は Notion への要求の送信と応答の読み取りを 1 か所にまとめる。body が nil なら本文を送らない。
+func (c *Client) do(ctx context.Context, method, path string, body, v any) error {
+	var reqBody io.Reader
+	if body != nil {
+		encoded, err := json.Marshal(body)
+		if err != nil {
+			return c.notionError(method, path, err)
+		}
+		reqBody = bytes.NewReader(encoded)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, reqBody)
 	if err != nil {
-		return c.notionError(path, err)
+		return c.notionError(method, path, err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Notion-Version", notionVersion)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return c.notionError(path, err)
+		return c.notionError(method, path, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return c.notionError(path, err)
+		return c.notionError(method, path, err)
 	}
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		var apiError struct {
@@ -99,20 +116,20 @@ func (c *Client) get(ctx context.Context, path string, v any) error {
 			Message string `json:"message"`
 		}
 		message := fmt.Sprintf("HTTP %d", resp.StatusCode)
-		if json.Unmarshal(body, &apiError) == nil && apiError.Code != "" {
+		if json.Unmarshal(respBody, &apiError) == nil && apiError.Code != "" {
 			message += " " + apiError.Code
 			if apiError.Message != "" {
 				message += ": " + apiError.Message
 			}
 		}
-		return c.notionError(path, errors.New(message))
+		return c.notionError(method, path, errors.New(message))
 	}
-	if err := json.Unmarshal(body, v); err != nil {
-		return c.notionError(path, errors.New("invalid response JSON"))
+	if err := json.Unmarshal(respBody, v); err != nil {
+		return c.notionError(method, path, errors.New("invalid response JSON"))
 	}
 	return nil
 }
 
-func (c *Client) invalidResponse(path, format string, args ...any) error {
-	return c.notionError(path, fmt.Errorf("invalid response: "+format, args...))
+func (c *Client) invalidResponse(method, path, format string, args ...any) error {
+	return c.notionError(method, path, fmt.Errorf("invalid response: "+format, args...))
 }
