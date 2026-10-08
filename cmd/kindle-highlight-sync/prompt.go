@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,10 +72,15 @@ const (
 	notMapped = -2 // 「対応させない」。choose が返し、optional のときは def にも渡せる
 )
 
+var errNoOptions = errors.New("no options to choose from")
+
 // choose は options を 1 からの番号付きで出し、選ばれた添字を返す。optional なら 0 で notMapped を選べる。
 // def が noDefault でなければ空の入力で def を返す。def に notMapped を渡せるのは optional のときだけ。
-// 範囲外や数字でない入力には選び直しを求める。
+// optional でなく options が空なら問いを出さずに errNoOptions を返す。範囲外や数字でない入力には選び直しを求める。
 func (p *prompter) choose(question string, options []string, def int, optional bool) (int, error) {
+	if !optional && len(options) == 0 {
+		return 0, errNoOptions
+	}
 	if _, err := fmt.Fprintln(p.out, question); err != nil {
 		return 0, err
 	}

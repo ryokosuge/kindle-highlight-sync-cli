@@ -136,6 +136,7 @@ func TestPrompterChoose(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		options    []string
 		input      string
 		def        int
 		optional   bool
@@ -238,11 +239,33 @@ func TestPrompterChoose(t *testing.T) {
 			wantErr:    io.ErrUnexpectedEOF,
 			wantStderr: "choose\n  1) A\n  2) B\nnumber: ",
 		},
+		{
+			name:       "必須で選択肢が空",
+			options:    []string{},
+			input:      "1\n",
+			def:        noDefault,
+			want:       0,
+			wantErr:    errNoOptions,
+			wantStderr: "",
+		},
+		{
+			name:       "optional で選択肢が空なら対応させないだけ選べる",
+			options:    []string{},
+			input:      "0\n",
+			def:        noDefault,
+			optional:   true,
+			want:       notMapped,
+			wantStderr: "choose\n  0) do not map\nnumber: ",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			fixture := newPromptFixture(strings.NewReader(tt.input))
-			got, err := fixture.p.choose("choose", []string{"A", "B"}, tt.def, tt.optional)
+			options := tt.options
+			if options == nil {
+				options = []string{"A", "B"}
+			}
+			got, err := fixture.p.choose("choose", options, tt.def, tt.optional)
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("choose() error = %v, want %v", err, tt.wantErr)
 			}
