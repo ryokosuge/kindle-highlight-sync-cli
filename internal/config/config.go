@@ -1,4 +1,4 @@
-// Package config loads config.toml.
+// Package config reads and writes config.toml.
 package config
 
 import (
@@ -30,10 +30,10 @@ type Notion struct {
 
 type Mapping struct {
 	Title           string `toml:"title"`
-	Author          string `toml:"author"`
-	ASIN            string `toml:"asin"`
+	Author          string `toml:"author,omitempty"`
+	ASIN            string `toml:"asin,omitempty"`
 	KindleID        string `toml:"kindle_id"`
-	LastAnnotatedAt string `toml:"last_annotated_at"`
+	LastAnnotatedAt string `toml:"last_annotated_at,omitempty"`
 }
 
 // knownKeys は toml タグから作る、受け付ける key の完全な path（綴りは完全一致）。
@@ -237,7 +237,8 @@ func keyParts(p *unstable.Parser, prefix []string, it unstable.Iterator) ([]stri
 func keyPaths(t reflect.Type, prefix string) map[string]bool {
 	keys := map[string]bool{}
 	for f := range t.Fields() {
-		key := prefix + f.Tag.Get("toml")
+		name, _, _ := strings.Cut(f.Tag.Get("toml"), ",")
+		key := prefix + name
 		keys[key] = true
 		if f.Type.Kind() == reflect.Struct {
 			for k := range keyPaths(f.Type, key+".") {
