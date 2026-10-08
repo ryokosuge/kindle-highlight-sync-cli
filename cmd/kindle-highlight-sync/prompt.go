@@ -35,6 +35,7 @@ func (p *prompter) line(question string) (string, error) {
 	return p.readLine()
 }
 
+// secret は入力が端末なら打った文字を画面に出さずに読み、端末でなければ 1 行として読む。
 func (p *prompter) secret(question string) (string, error) {
 	if _, err := fmt.Fprintf(p.out, "%s: ", question); err != nil {
 		return "", err
@@ -53,6 +54,7 @@ func (p *prompter) secret(question string) (string, error) {
 	return strings.TrimSpace(string(password)), nil
 }
 
+// readLine は 1 行を読み、前後の空白を除いて返す。何も読めないまま EOF なら io.ErrUnexpectedEOF を返す。
 func (p *prompter) readLine() (string, error) {
 	line, err := p.in.ReadString('\n')
 	if err != nil && err != io.EOF {
@@ -69,7 +71,9 @@ const (
 	notMapped = -2 // 「対応させない」。choose が返し、optional のときは def にも渡せる
 )
 
-// choose は番号で選択させる。def に notMapped を渡せるのは optional のときだけ。
+// choose は options を 1 からの番号付きで出し、選ばれた添字を返す。optional なら 0 で notMapped を選べる。
+// def が noDefault でなければ空の入力で def を返す。def に notMapped を渡せるのは optional のときだけ。
+// 範囲外や数字でない入力には選び直しを求める。
 func (p *prompter) choose(question string, options []string, def int, optional bool) (int, error) {
 	if _, err := fmt.Fprintln(p.out, question); err != nil {
 		return 0, err
@@ -85,9 +89,9 @@ func (p *prompter) choose(question string, options []string, def int, optional b
 		}
 	}
 
-	min := 1
+	lowest := 1
 	if optional {
-		min = 0
+		lowest = 0
 	}
 	for {
 		switch def {
@@ -118,7 +122,7 @@ func (p *prompter) choose(question string, options []string, def int, optional b
 		if optional && err == nil && n == 0 {
 			return notMapped, nil
 		}
-		if _, err := fmt.Fprintf(p.out, "enter a number from %d to %d\n", min, len(options)); err != nil {
+		if _, err := fmt.Fprintf(p.out, "enter a number from %d to %d\n", lowest, len(options)); err != nil {
 			return 0, err
 		}
 	}
