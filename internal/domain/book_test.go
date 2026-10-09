@@ -106,7 +106,7 @@ func TestNewBookID(t *testing.T) {
 		},
 		{
 			name:   "NBSP も畳まれる",
-			title:  "a b",
+			title:  "a\u00a0b",
 			author: "Author",
 			want:   "b1-98bd0bed963cb72360cc1fd2248954da",
 		},
