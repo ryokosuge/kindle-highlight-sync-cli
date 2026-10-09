@@ -56,7 +56,7 @@ func holdLock(t *testing.T, cmd string) (release chan<- struct{}, done <-chan ru
 		t.Cleanup(func() { loginBody = orig })
 	case "sync":
 		orig := syncBody
-		syncBody = func(context.Context, *app) error { return body() }
+		syncBody = func(context.Context, *app, bool) error { return body() }
 		t.Cleanup(func() { syncBody = orig })
 	default:
 		t.Fatalf("holdLock: unknown cmd %q", cmd)

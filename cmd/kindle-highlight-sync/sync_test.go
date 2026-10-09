@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +17,7 @@ import (
 
 const (
 	wantSyncShort         = "Kindle の Highlight と Note を Notion に同期する"
+	wantSyncHeadedUsage   = "画面付きの Chrome で同期する（既定は headless）"
 	wantAlreadyRunningErr = "already running: another kindle-highlight-sync process is running\n"
 )
 
@@ -50,18 +52,34 @@ func assertSyncSucceeded(t *testing.T, code int, stderr string, lockFile string)
 }
 
 func TestSync(t *testing.T) {
-	t.Run("排他の内側で login と同じ browser-profile を headless で開き、Notebook に到達すると exit 0 で終わる", func(t *testing.T) {
-		p := setupXDG(t, "")
-		b, s := stubReachedBrowser(t)
-
-		code, stderr := runSync(t)
-		assertSyncSucceeded(t, code, stderr, filepath.Join(p.DataDir, "run.lock"))
-		wantOpts := source.Options{ProfileDir: filepath.Join(p.DataDir, "browser-profile"), Headless: true}
-		if s.opened != 1 || s.opts != wantOpts {
-			t.Errorf("openBrowser called %d times with %+v, want once with %+v", s.opened, s.opts, wantOpts)
+	t.Run("排他の内側で login と同じ browser-profile を開き、Notebook に到達すると exit 0 で終わる", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			args         []string
+			wantHeadless bool
+		}{
+			{name: "--headed を付けなければ headless で開く", args: []string{"sync"}, wantHeadless: true},
+			{name: "--headed を付けると画面付きで開く", args: []string{"sync", "--headed"}, wantHeadless: false},
 		}
-		if !b.closed {
-			t.Error("browser not closed")
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				p := setupXDG(t, "")
+				b, s := stubReachedBrowser(t)
+
+				var stdout, stderr bytes.Buffer
+				code := run(tt.args, &stdout, &stderr)
+				if stdout.Len() != 0 {
+					t.Errorf("run(%v) stdout = %q, want empty", tt.args, stdout.String())
+				}
+				assertSyncSucceeded(t, code, stderr.String(), filepath.Join(p.DataDir, "run.lock"))
+				wantOpts := source.Options{ProfileDir: filepath.Join(p.DataDir, "browser-profile"), Headless: tt.wantHeadless}
+				if s.opened != 1 || s.opts != wantOpts {
+					t.Errorf("openBrowser called %d times with %+v, want once with %+v", s.opened, s.opts, wantOpts)
+				}
+				if !b.closed {
+					t.Error("browser not closed")
+				}
+			})
 		}
 	})
 
@@ -245,6 +263,23 @@ func TestSync(t *testing.T) {
 		setupXDG(t, "")
 		if !helpLists(t, "sync", wantSyncShort) {
 			t.Error("--help output does not list sync")
+		}
+	})
+
+	t.Run("sync --help に --headed とその説明が出る", func(t *testing.T) {
+		setupXDG(t, "")
+		var stdout, stderr bytes.Buffer
+		if code := run([]string{"sync", "--help"}, &stdout, &stderr); code != 0 {
+			t.Errorf("run(sync --help) code = %d, stderr = %q, want 0", code, stderr.String())
+		}
+		var found bool
+		for line := range strings.Lines(stdout.String()) {
+			if strings.Contains(line, "--headed") && strings.Contains(line, wantSyncHeadedUsage) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("sync --help output does not list --headed: %q", stdout.String())
 		}
 	})
 }
