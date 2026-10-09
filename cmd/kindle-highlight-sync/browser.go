@@ -1,0 +1,23 @@
+package main
+
+import (
+	"context"
+
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
+)
+
+// browser は login と sync が開く Chrome。*source.Browser が満たす。
+type browser interface {
+	OpenNotebook(ctx context.Context) (bool, error)
+	WaitNotebook(ctx context.Context) error
+	Close() error
+}
+
+// openBrowser は Chrome を起動する。CI に Chrome は無いので、テストは fake に差し替える。
+var openBrowser = func(ctx context.Context, opts source.Options) (browser, error) {
+	b, err := source.Open(ctx, opts)
+	if err != nil {
+		return nil, err // 型付きの nil を interface に入れない
+	}
+	return b, nil
+}
