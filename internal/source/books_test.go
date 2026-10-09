@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 )
 
 func TestLibraryURL(t *testing.T) {
@@ -116,11 +117,23 @@ func TestListBooks(t *testing.T) {
 		{
 			name: "1 ページだけ",
 			pages: map[string]fakeLibraryPage{
-				"": {fixture: "library_last.html"},
+				"": {html: `<div id="kp-notebook-library" class="a-row">` +
+					`<div id="AAAAAAAAA5" class="a-row kp-notebook-library-each-book">` +
+					`<h2 class="kp-notebook-searchable">合成の書名 F</h2><p class="kp-notebook-searchable">合成 著者 F</p>` +
+					`<input type="hidden" id="kp-notebook-annotated-date-AAAAAAAAA5" value="2026年1月5日月曜日"></div></div>` +
+					`<input type="hidden" class="kp-notebook-library-next-page-start" value="">`},
 			},
 			want: []domain.Book{
 				{ID: "AAAAAAAAA5", ASIN: "AAAAAAAAA5", Title: "合成の書名 F", Author: "合成 著者 F", LastAnnotatedAt: date(2026, time.January, 5)},
 			},
+			wantCalls: []string{""},
+		},
+		{
+			name: "root はあるが Book が 0 冊の 1 ページ目は 0 件で終わる",
+			pages: map[string]fakeLibraryPage{
+				"": {fixture: "library_first_empty.html"},
+			},
+			want:      nil,
 			wantCalls: []string{""},
 		},
 	}
@@ -151,8 +164,19 @@ func TestListBooksError(t *testing.T) {
 		pages     map[string]fakeLibraryPage
 		want      string
 		wantIs    error
+		wantCode  int // 構造の異常は 7（SourceFormat）、取得そのものの失敗は 1（種類なし）
 		wantCalls []string
 	}{
+		{
+			name: "1 ページ目の取得に失敗",
+			pages: map[string]fakeLibraryPage{
+				"": {err: errFakeLibraryFetch},
+			},
+			want:      "source: list books: page 1: fake fetch failed",
+			wantIs:    errFakeLibraryFetch,
+			wantCode:  1,
+			wantCalls: []string{""},
+		},
 		{
 			name: "2 ページ目の取得に失敗",
 			pages: map[string]fakeLibraryPage{
@@ -161,16 +185,38 @@ func TestListBooksError(t *testing.T) {
 			},
 			want:      "source: list books: page 2: fake fetch failed",
 			wantIs:    errFakeLibraryFetch,
+			wantCode:  1,
 			wantCalls: []string{"", "aaaa9999AAAA%2Baaaa9999%3D"},
 		},
 		{
-			name: "2 ページ目の解析に失敗",
+			name: "1 ページ目に root が無い",
+			pages: map[string]fakeLibraryPage{
+				"": {fixture: "library_no_root.html"},
+			},
+			want:      "source: list books: page 1: source: library page: notebook root container is missing: unexpected notebook structure",
+			wantIs:    ErrSourceFormat,
+			wantCode:  7,
+			wantCalls: []string{""},
+		},
+		{
+			name: "1 ページ目に続きの token も最後のページの印も無い",
+			pages: map[string]fakeLibraryPage{
+				"": {fixture: "library_no_end_marker.html"},
+			},
+			want:      "source: list books: page 1: source: library page: next page token input is missing: unexpected notebook structure",
+			wantIs:    ErrSourceFormat,
+			wantCode:  7,
+			wantCalls: []string{""},
+		},
+		{
+			name: "2 ページ目の断片に続きの token も最後のページの印も無い",
 			pages: map[string]fakeLibraryPage{
 				"":                           {fixture: "library_first.html"},
 				"aaaa9999AAAA%2Baaaa9999%3D": {html: "<p>broken</p>"},
 			},
-			want:      "source: list books: page 2: source: library page: next page token input is missing",
-			wantIs:    errLibraryNextTokenMissing,
+			want:      "source: list books: page 2: source: library page: next page token input is missing: unexpected notebook structure",
+			wantIs:    ErrSourceFormat,
+			wantCode:  7,
 			wantCalls: []string{"", "aaaa9999AAAA%2Baaaa9999%3D"},
 		},
 		{
@@ -179,8 +225,9 @@ func TestListBooksError(t *testing.T) {
 				"":                           {fixture: "library_first.html"},
 				"aaaa9999AAAA%2Baaaa9999%3D": {html: `<input type="hidden" class="kp-notebook-library-next-page-start" value="aaaa9999AAAA%2Baaaa9999%3D">`},
 			},
-			want:      "source: list books: page 2: next page token was already used",
-			wantIs:    errLibraryTokenRepeated,
+			want:      "source: list books: page 2: next page token was already used: unexpected notebook structure",
+			wantIs:    ErrSourceFormat,
+			wantCode:  7,
 			wantCalls: []string{"", "aaaa9999AAAA%2Baaaa9999%3D"},
 		},
 		{
@@ -190,8 +237,9 @@ func TestListBooksError(t *testing.T) {
 				"aaaa9999AAAA%2Baaaa9999%3D": {fixture: "library_next.html"},
 				"aaaa9999BBBB%2Baaaa9999%3D": {html: `<input type="hidden" class="kp-notebook-library-next-page-start" value="aaaa9999AAAA%2Baaaa9999%3D">`},
 			},
-			want:      "source: list books: page 3: next page token was already used",
-			wantIs:    errLibraryTokenRepeated,
+			want:      "source: list books: page 3: next page token was already used: unexpected notebook structure",
+			wantIs:    ErrSourceFormat,
+			wantCode:  7,
 			wantCalls: []string{"", "aaaa9999AAAA%2Baaaa9999%3D", "aaaa9999BBBB%2Baaaa9999%3D"},
 		},
 		{
@@ -202,6 +250,7 @@ func TestListBooksError(t *testing.T) {
 			},
 			want:      "source: list books: page 3: context canceled",
 			wantIs:    context.Canceled,
+			wantCode:  1,
 			wantCalls: []string{"", "aaaa9999AAAA%2Baaaa9999%3D"},
 		},
 	}
@@ -222,6 +271,12 @@ func TestListBooksError(t *testing.T) {
 			}
 			if !errors.Is(err, tt.wantIs) {
 				t.Errorf("errors.Is(err, %v) = false, err = %v", tt.wantIs, err)
+			}
+			if got := exitcode.Code(err); got != tt.wantCode {
+				t.Errorf("exitcode.Code(err) = %d, want %d", got, tt.wantCode)
+			}
+			if errors.Is(err, ErrSourceFormat) != (tt.wantCode == 7) {
+				t.Errorf("errors.Is(err, ErrSourceFormat) = %v, want %v", tt.wantCode != 7, tt.wantCode == 7)
 			}
 			if strings.Contains(err.Error(), "aaaa9999") {
 				t.Errorf("listBooks() error = %q, want no token", err.Error())
