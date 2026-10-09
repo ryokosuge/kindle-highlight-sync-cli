@@ -32,7 +32,7 @@ func listBooks(ctx context.Context, fetch fetchPage) ([]domain.Book, error) {
 		if err != nil {
 			return nil, fmt.Errorf("source: list books: page %d: %w", n, err)
 		}
-		p, err := parseLibraryPage(html, token)
+		p, err := parseLibraryResponse(html, token)
 		if err != nil {
 			return nil, fmt.Errorf("source: list books: page %d: %w", n, err)
 		}
@@ -48,8 +48,8 @@ func listBooks(ctx context.Context, fetch fetchPage) ([]domain.Book, error) {
 	}
 }
 
-// parseLibraryPage は token が空なら 1 ページ目として、それ以外は続きの断片として解析する（仕様書 §18.4）。
-func parseLibraryPage(html []byte, token string) (LibraryPage, error) {
+// parseLibraryResponse は token が空なら 1 ページ目として、それ以外は続きの断片として解析する（仕様書 §18.4）。
+func parseLibraryResponse(html []byte, token string) (LibraryPage, error) {
 	if token == "" {
 		return ParseLibraryPage(html)
 	}
