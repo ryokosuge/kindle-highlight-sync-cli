@@ -1,0 +1,25 @@
+initialize:
+  - name: Install Go 1.27
+    uses: github.com/actions/setup-go@v5
+    with:
+      go-version: "1.27"
+  - name: Install golangci-lint v2.14
+    # CI は golangci-lint-action の version: v2.14 でパッチ版を固定していない。v2.14 系のタグは v2.14.0 のみ存在する（git ls-remote --tags golangci/golangci-lint で確認）ため v2.14.0 に固定
+    run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
+
+maintenance:
+  - name: Download Go modules
+    run: go mod download
+
+knowledge:
+  - name: build
+    contents: go build ./cmd/kindle-highlight-sync
+  - name: test
+    contents: go test ./...
+  - name: test_single
+    contents: go test ./internal/<pkg> または go test ./cmd/kindle-highlight-sync -run <TestName>
+  - name: lint
+    contents: golangci-lint run
+
+# サービス: なし / secrets: なし（環境変数は XDG_CONFIG_HOME / XDG_DATA_HOME のみ）
+# 根拠: go.mod（go 1.27）, .github/workflows/ci.yml（go test ./... / golangci-lint v2.14）, .golangci.yml, README.md（go build）
