@@ -124,6 +124,97 @@ func TestSync(t *testing.T) {
 		}
 	})
 
+	t.Run("Notebook を開いた直後に Amazon の認証を確かめる", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			reached    bool
+			pageURL    string
+			pageHTML   []byte
+			pageErr    error
+			wantCode   int
+			wantStderr string
+		}{
+			{
+				name:       "認証ページに送られたら exit 2",
+				pageURL:    "https://www.amazon.co.jp/ap/signin?openid.return_to=https%3A%2F%2Fread.amazon.co.jp%2Fnotebook#secret-fragment",
+				pageHTML:   []byte("<p>sign in</p>"),
+				wantCode:   2,
+				wantStderr: "Amazon authentication required: sync: redirected to the Amazon sign-in page \"www.amazon.co.jp/ap/signin\"; run `kindle-highlight-sync login` to sign in again\n",
+			},
+			{
+				name:       "Notebook の URL に login form があれば exit 2",
+				reached:    true,
+				pageURL:    "https://read.amazon.co.jp/notebook",
+				pageHTML:   []byte(`<form name="signIn"><input name="email"></form>`),
+				wantCode:   2,
+				wantStderr: "Amazon authentication required: sync: a login form is present at \"read.amazon.co.jp/notebook\" without the Kindle Notebook library; run `kindle-highlight-sync login` to sign in again\n",
+			},
+			{
+				name:       "認証済みなら exit 0",
+				reached:    true,
+				pageURL:    "https://read.amazon.co.jp/notebook",
+				pageHTML:   []byte(`<div id="kp-notebook-library"></div>`),
+				wantCode:   0,
+				wantStderr: "",
+			},
+			{
+				name:       "判定不能でも認証切れにせず exit 0",
+				reached:    true,
+				pageURL:    "https://read.amazon.co.jp/notebook",
+				pageHTML:   []byte("<p>notebook</p>"),
+				wantCode:   0,
+				wantStderr: "",
+			},
+			{
+				name:       "判定不能で届いていなければ従来どおり exit 1",
+				pageURL:    "https://example.com/other",
+				pageHTML:   []byte("<p>other</p>"),
+				wantCode:   1,
+				wantStderr: "general error: sync: kindle notebook not reached\n",
+			},
+			{
+				name:       "Page の失敗はそのまま返す",
+				reached:    true,
+				pageErr:    errors.New("source: read page: boom"),
+				wantCode:   1,
+				wantStderr: "general error: source: read page: boom\n",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				setupXDG(t, "")
+				b := &fakeBrowser{
+					reached:  tt.reached,
+					pageURL:  tt.pageURL,
+					pageHTML: tt.pageHTML,
+					pageErr:  tt.pageErr,
+				}
+				stubBrowser(t, b, nil)
+
+				code, stderr := runSync(t)
+				if code != tt.wantCode {
+					t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
+				}
+				if stderr != tt.wantStderr {
+					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
+				}
+				if tt.name == "認証ページに送られたら exit 2" {
+					for _, secret := range []string{"openid", "secret-fragment"} {
+						if strings.Contains(stderr, secret) {
+							t.Errorf("run(sync) stderr = %q, want no %q", stderr, secret)
+						}
+					}
+				}
+				if !b.closed {
+					t.Error("browser not closed")
+				}
+				if b.pageCalled != 1 {
+					t.Errorf("Page() called %d times, want 1", b.pageCalled)
+				}
+			})
+		}
+	})
+
 	t.Run("Notebook を開くのに失敗したらその失敗をそのまま返す", func(t *testing.T) {
 		setupXDG(t, "")
 		b := &fakeBrowser{openErr: errors.New("source: open notebook: boom")}

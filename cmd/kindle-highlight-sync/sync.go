@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/lock"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
@@ -17,7 +18,20 @@ const lockFileName = "run.lock"
 // syncNotebookWait は headless の Chrome で Notebook を開き終えるのを待つ上限。login と違い本人の操作を待たない。
 const syncNotebookWait = time.Minute
 
-// syncBody は排他の内側で行う sync の処理。login の profile を headless（--headed なら画面付き）で開き、Notebook に到達したかを 1 回だけ確かめる。
+// checkAuth は Notebook を開いたあとのページから Amazon の認証を確かめ、切れていれば exitcode.AmazonAuth（2）で包んだ失敗を返す。
+// 判定不能は認証切れにしない（Notebook の構造の異常は SourceFormatError で止める）。
+var checkAuth = func(ctx context.Context, b browser) error {
+	finalURL, html, err := b.Page(ctx)
+	if err != nil {
+		return err
+	}
+	if state, reason := source.DetectAuth(finalURL, html); state == source.AuthExpired {
+		return exitcode.New(exitcode.AmazonAuth, fmt.Errorf("sync: %s; run `kindle-highlight-sync login` to sign in again", reason))
+	}
+	return nil
+}
+
+// syncBody は排他の内側で行う sync の処理。login の profile を headless（--headed なら画面付き）で開き、Notebook 到達後に Amazon の認証を確かめる。
 // テストは差し替えて先発を止めておく。後続の Epic が Highlight の取得と Notion への同期をここに足す。
 var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// Open に渡す ctx にタイムアウトを付けると Chrome ごと止まるので、Notebook を開く action だけに付ける
@@ -41,8 +55,11 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if err != nil {
 		return err
 	}
+	if err := checkAuth(octx, b); err != nil {
+		return err
+	}
 	if !reached {
-		// 認証切れの判定と exit 2 は後続の Task で足す。ここでは成功扱いにしないことだけを守る
+		// 認証切れでないのに届かなかったときは成功扱いにしない
 		return fmt.Errorf("sync: %w", source.ErrNotebookNotReached)
 	}
 	return nil

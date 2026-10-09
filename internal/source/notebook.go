@@ -50,6 +50,21 @@ func (b *Browser) OpenNotebook(ctx context.Context) (bool, error) {
 	return isNotebook(loc), nil
 }
 
+// Page は今開いているページの最終 URL と HTML を返す。OpenNotebook のあとに認証の状態を確かめるのに使う。
+func (b *Browser) Page(ctx context.Context) (finalURL string, html []byte, err error) {
+	rctx, cancel := b.withContext(ctx)
+	defer cancel()
+	loc, err := chromedp.Run(rctx, chromedp.Location())
+	if err != nil {
+		return "", nil, fmt.Errorf("source: read page: %w", err)
+	}
+	outer, err := chromedp.Run(rctx, chromedp.OuterHTML("html"))
+	if err != nil {
+		return "", nil, fmt.Errorf("source: read page: %w", err)
+	}
+	return loc, []byte(outer), nil
+}
+
 // WaitNotebook は Kindle Notebook を開き、最終 URL が Notebook になるまで pollInterval ごとに見続ける（login で本人がサインインし終えるのを待つ）。
 // 届いたら nil を返す。届く前に ctx が切れたかブラウザが閉じられたら ErrNotebookNotReached を返す。
 func (b *Browser) WaitNotebook(ctx context.Context) error {

@@ -9,6 +9,7 @@ import (
 // browser は login と sync が開く Chrome。*source.Browser が満たす。
 type browser interface {
 	OpenNotebook(ctx context.Context) (bool, error)
+	Page(ctx context.Context) (finalURL string, html []byte, err error)
 	WaitNotebook(ctx context.Context) error
 	Close() error
 }
