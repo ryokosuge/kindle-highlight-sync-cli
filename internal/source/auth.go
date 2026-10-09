@@ -26,7 +26,10 @@ const (
 
 var authSignInPathPrefixes = []string{"/ap/", "/ax/"}
 
-// DetectAuth は最終 URL と HTML から Amazon の認証状態を判定する。
+// DetectAuth は最終 URL と HTML から Amazon の認証状態を判定する（仕様書 §37 / §18.9 (7)）。
+// 最終 URL が sign-in（host が www.amazon.co.jp で path が /ap/ か /ax/ で始まる）なら HTML を見ずに AuthExpired。
+// Notebook の必須要素（#kp-notebook-library）があれば AuthOK、無くて login page の印があれば AuthExpired、どちらも無ければ AuthUnknown。
+// reason は最終 URL の host と path だけで組み、クエリ・fragment・認証情報・HTML の中身を入れない。
 func DetectAuth(finalURL string, html []byte) (state AuthState, reason string) {
 	u, err := url.Parse(finalURL)
 	if err != nil {
