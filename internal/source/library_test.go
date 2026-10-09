@@ -170,6 +170,14 @@ func TestParseLibraryPageError(t *testing.T) {
 			notWant: []string{title, author},
 		},
 		{
+			name: "続きの token の input に value 属性が無い",
+			html: `<div id="AAAAAAAAA1" class="a-row kp-notebook-library-each-book">` +
+				`<h2 class="kp-notebook-searchable">` + title + `</h2><p class="kp-notebook-searchable">` + author + `</p></div>` +
+				`<input type="hidden" class="kp-notebook-library-next-page-start">`,
+			want:    "source: library page: next page token input has no value attribute",
+			notWant: []string{title, author, "<input"},
+		},
+		{
 			name:    "HTML として解析できない",
 			html:    strings.Repeat("<div>", 600) + title + author,
 			want:    "source: library page: parse HTML: html: open stack of elements exceeds 512 nodes",

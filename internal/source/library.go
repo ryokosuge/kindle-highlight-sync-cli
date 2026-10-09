@@ -24,6 +24,7 @@ const (
 
 var (
 	errLibraryNextTokenMissing = errors.New("source: library page: next page token input is missing")
+	errLibraryNextTokenNoValue = errors.New("source: library page: next page token input has no value attribute")
 	errAnnotatedDateForm       = errors.New("last annotated date is not in the YYYY年M月D日<曜日> form")
 	errAnnotatedDateCalendar   = errors.New("last annotated date is not a valid calendar date")
 	errAnnotatedDateWeekday    = errors.New("last annotated date has a weekday that does not match the date")
@@ -50,8 +51,12 @@ func ParseLibraryPage(html []byte) (LibraryPage, error) {
 		return LibraryPage{}, errLibraryNextTokenMissing
 	}
 
-	var page LibraryPage
-	page.NextToken = next.AttrOr("value", "")
+	token, ok := next.Attr("value")
+	if !ok {
+		return LibraryPage{}, errLibraryNextTokenNoValue
+	}
+
+	page := LibraryPage{NextToken: token}
 	var parseErr error
 	doc.Find(librarySelectorBook).EachWithBreak(func(i int, s *goquery.Selection) bool {
 		book, err := parseLibraryBook(s)
