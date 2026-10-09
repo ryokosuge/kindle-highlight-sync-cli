@@ -10,17 +10,23 @@ import (
 
 // fakeBrowser は openBrowser の差し替えが返すブラウザ。CI に Chrome は無いので、本物は開かない。
 type fakeBrowser struct {
+	reached  bool  // OpenNotebook が返す
+	openErr  error // OpenNotebook が返す
 	waitErr  error // WaitNotebook が返す
 	closeErr error // Close が返す
 	onClose  func()
 
+	openDeadline time.Time // OpenNotebook に渡った ctx の期限（無ければゼロ値）
+	openCalledAt time.Time
 	waitDeadline time.Time // WaitNotebook に渡った ctx の期限（無ければゼロ値）
 	waitCalledAt time.Time
 	closed       bool
 }
 
-func (f *fakeBrowser) OpenNotebook(context.Context) (bool, error) {
-	return false, nil
+func (f *fakeBrowser) OpenNotebook(ctx context.Context) (bool, error) {
+	f.openCalledAt = time.Now()
+	f.openDeadline, _ = ctx.Deadline()
+	return f.reached, f.openErr
 }
 
 func (f *fakeBrowser) WaitNotebook(ctx context.Context) error {

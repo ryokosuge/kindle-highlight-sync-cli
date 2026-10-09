@@ -3,16 +3,28 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
+	"time"
+
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/lock"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
 
 const (
 	wantSyncShort         = "Kindle の Highlight と Note を Notion に同期する"
 	wantAlreadyRunningErr = "already running: another kindle-highlight-sync process is running\n"
 )
+
+// stubReachedBrowser は Notebook に到達する fake に openBrowser を差し替える。CI に Chrome は無いので、sync を走らせるケースは必ず差し替える。
+func stubReachedBrowser(t *testing.T) (*fakeBrowser, *browserStub) {
+	t.Helper()
+	b := &fakeBrowser{reached: true}
+	return b, stubBrowser(t, b, nil)
+}
 
 func runSync(t *testing.T) (code int, stderr string) {
 	t.Helper()
@@ -38,54 +50,170 @@ func assertSyncSucceeded(t *testing.T, code int, stderr string, lockFile string)
 }
 
 func TestSync(t *testing.T) {
-	t.Run("ほかに sync が動いていなければ exit 0 で終わり run.lock ができる", func(t *testing.T) {
+	t.Run("排他の内側で login と同じ browser-profile を headless で開き、Notebook に到達すると exit 0 で終わる", func(t *testing.T) {
 		p := setupXDG(t, "")
+		b, s := stubReachedBrowser(t)
+
 		code, stderr := runSync(t)
 		assertSyncSucceeded(t, code, stderr, filepath.Join(p.DataDir, "run.lock"))
+		wantOpts := source.Options{ProfileDir: filepath.Join(p.DataDir, "browser-profile"), Headless: true}
+		if s.opened != 1 || s.opts != wantOpts {
+			t.Errorf("openBrowser called %d times with %+v, want once with %+v", s.opened, s.opts, wantOpts)
+		}
+		if !b.closed {
+			t.Error("browser not closed")
+		}
+	})
+
+	t.Run("Notebook を開く action には 1 分の期限が付き、Open に渡す ctx には付かない", func(t *testing.T) {
+		setupXDG(t, "")
+		b := &fakeBrowser{reached: true}
+		origOpen := openBrowser
+		openBrowser = func(ctx context.Context, opts source.Options) (browser, error) {
+			if d, ok := ctx.Deadline(); ok {
+				t.Errorf("openBrowser ctx has deadline %v, want none", d)
+			}
+			return origOpen(ctx, opts)
+		}
+		t.Cleanup(func() { openBrowser = origOpen })
+		stubBrowser(t, b, nil)
+
+		if code, stderr := runSync(t); code != 0 {
+			t.Fatalf("run(sync) code = %d, stderr = %q, want 0", code, stderr)
+		}
+		if b.openDeadline.IsZero() {
+			t.Fatal("OpenNotebook ctx has no deadline, want 1m")
+		}
+		if wait := b.openDeadline.Sub(b.openCalledAt); wait > time.Minute || wait < 50*time.Second {
+			t.Errorf("OpenNotebook deadline is %v ahead, want 1m", wait)
+		}
+	})
+
+	t.Run("Notebook に到達しなかったら exit 0 で終わらない（種類を持たない失敗の exit 1）", func(t *testing.T) {
+		setupXDG(t, "")
+		b := &fakeBrowser{reached: false}
+		stubBrowser(t, b, nil)
+
+		code, stderr := runSync(t)
+		if code != 1 {
+			t.Errorf("run(sync) code = %d, want 1", code)
+		}
+		if want := "general error: sync: kindle notebook not reached\n"; stderr != want {
+			t.Errorf("run(sync) stderr = %q, want %q", stderr, want)
+		}
+		if !b.closed {
+			t.Error("browser not closed")
+		}
+	})
+
+	t.Run("Notebook を開くのに失敗したらその失敗をそのまま返す", func(t *testing.T) {
+		setupXDG(t, "")
+		b := &fakeBrowser{openErr: errors.New("source: open notebook: boom")}
+		stubBrowser(t, b, nil)
+
+		code, stderr := runSync(t)
+		if code != 1 {
+			t.Errorf("run(sync) code = %d, want 1", code)
+		}
+		if want := "general error: source: open notebook: boom\n"; stderr != want {
+			t.Errorf("run(sync) stderr = %q, want %q", stderr, want)
+		}
+		if !b.closed {
+			t.Error("browser not closed")
+		}
+	})
+
+	t.Run("Chrome を起動できないと exit 5 で終わる", func(t *testing.T) {
+		setupXDG(t, "")
+		openErr := exitcode.New(exitcode.Browser, errors.New("source: start browser: exec: \"google-chrome\": executable file not found"))
+		stubBrowser(t, nil, openErr)
+
+		code, stderr := runSync(t)
+		if code != 5 {
+			t.Errorf("run(sync) code = %d, want 5", code)
+		}
+		if want := "browser error: source: start browser: exec: \"google-chrome\": executable file not found\n"; stderr != want {
+			t.Errorf("run(sync) stderr = %q, want %q", stderr, want)
+		}
+	})
+
+	t.Run("ブラウザを閉じる失敗は、本体が成功したときだけ返す", func(t *testing.T) {
+		closeErr := exitcode.New(exitcode.Browser, errors.New("source: close browser: boom"))
+		tests := []struct {
+			name       string
+			reached    bool
+			wantCode   int
+			wantStderr string
+		}{
+			{name: "到達して閉じるのに失敗", reached: true, wantCode: 5, wantStderr: "browser error: source: close browser: boom\n"},
+			{name: "未到達を優先する", reached: false, wantCode: 1, wantStderr: "general error: sync: kindle notebook not reached\n"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				setupXDG(t, "")
+				stubBrowser(t, &fakeBrowser{reached: tt.reached, closeErr: closeErr}, nil)
+
+				code, stderr := runSync(t)
+				if code != tt.wantCode {
+					t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
+				}
+				if stderr != tt.wantStderr {
+					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
+				}
+			})
+		}
+	})
+
+	t.Run("ブラウザは排他を解放する前に閉じられる", func(t *testing.T) {
+		p := setupXDG(t, "")
+		lockFile := filepath.Join(p.DataDir, "run.lock")
+		codeAtClose := -1
+		b, _ := stubReachedBrowser(t)
+		b.onClose = func() {
+			l, err := lock.Acquire(lockFile)
+			codeAtClose = exitcode.Code(err)
+			if err == nil {
+				_ = l.Release()
+			}
+		}
+
+		if code, stderr := runSync(t); code != 0 {
+			t.Fatalf("run(sync) code = %d, stderr = %q, want 0", code, stderr)
+		}
+		if codeAtClose != 9 {
+			t.Errorf("lock.Acquire during Close returned code %d, want 9 (lock still held)", codeAtClose)
+		}
 	})
 
 	t.Run("先発が排他を持っている間の 2 つ目は待たずに exit 9 で終わる", func(t *testing.T) {
-		p := setupXDG(t, "")
-		acquired, release := make(chan struct{}), make(chan struct{})
-		orig := syncBody
-		syncBody = func(context.Context, *app) error {
-			close(acquired)
-			<-release
-			return nil
-		}
-		t.Cleanup(func() { syncBody = orig })
+		for _, holder := range []string{"sync", "login"} {
+			t.Run(holder+" が持っている", func(t *testing.T) {
+				setupXDG(t, "")
+				_, s := stubReachedBrowser(t)
+				release, done := holdLock(t, holder)
 
-		type result struct {
-			code   int
-			stderr string
-		}
-		first := make(chan result)
-		go func() {
-			var stdout, stderr bytes.Buffer
-			code := run([]string{"sync"}, &stdout, &stderr)
-			first <- result{code: code, stderr: stderr.String()}
-		}()
-		select {
-		case <-acquired:
-		case got := <-first:
-			t.Fatalf("first run(sync) returned before syncBody ran: code = %d, stderr = %q", got.code, got.stderr)
-		}
+				code, stderr := runSync(t)
+				if code != 9 {
+					t.Errorf("second run(sync) code = %d, want 9", code)
+				}
+				if stderr != wantAlreadyRunningErr {
+					t.Errorf("second run(sync) stderr = %q, want %q", stderr, wantAlreadyRunningErr)
+				}
+				if s.opened != 0 {
+					t.Errorf("openBrowser called %d times while %s holds the lock, want 0", s.opened, holder)
+				}
 
-		code, stderr := runSync(t)
-		if code != 9 {
-			t.Errorf("second run(sync) code = %d, want 9", code)
+				close(release)
+				if got := <-done; got.code != 0 || got.stderr != "" {
+					t.Errorf("first run(%s) code = %d, stderr = %q, want 0 and empty", holder, got.code, got.stderr)
+				}
+			})
 		}
-		if stderr != wantAlreadyRunningErr {
-			t.Errorf("second run(sync) stderr = %q, want %q", stderr, wantAlreadyRunningErr)
-		}
-
-		close(release)
-		got := <-first
-		assertSyncSucceeded(t, got.code, got.stderr, filepath.Join(p.DataDir, "run.lock"))
 	})
 
 	t.Run("前の実行の run.lock が残っていても誰も持っていなければ exit 0 で終わる", func(t *testing.T) {
 		p := setupXDG(t, "")
+		stubReachedBrowser(t)
 		lockFile := filepath.Join(p.DataDir, "run.lock")
 		if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
 			t.Fatal(err)
@@ -99,6 +227,7 @@ func TestSync(t *testing.T) {
 
 	t.Run("壊れた config.toml なら前処理で exit 3 で止まる", func(t *testing.T) {
 		p := setupXDG(t, invalidTOML)
+		_, s := stubReachedBrowser(t)
 		code, stderr := runSync(t)
 		if code != 3 {
 			t.Errorf("run(sync) code = %d, want 3", code)
@@ -107,22 +236,15 @@ func TestSync(t *testing.T) {
 		if stderr != wantStderr {
 			t.Errorf("run(sync) stderr = %q, want %q", stderr, wantStderr)
 		}
+		if s.opened != 0 {
+			t.Errorf("openBrowser called %d times, want 0", s.opened)
+		}
 	})
 
 	t.Run("--help の一覧に sync が出る", func(t *testing.T) {
 		setupXDG(t, "")
-		var stdout, stderr bytes.Buffer
-		if code := run([]string{"--help"}, &stdout, &stderr); code != 0 {
-			t.Errorf("run(--help) code = %d, want 0", code)
-		}
-		var found bool
-		for line := range strings.Lines(stdout.String()) {
-			if strings.HasPrefix(line, "  sync ") && strings.Contains(line, wantSyncShort) {
-				found = true
-			}
-		}
-		if !found {
-			t.Errorf("--help output does not list sync: %q", stdout.String())
+		if !helpLists(t, "sync", wantSyncShort) {
+			t.Error("--help output does not list sync")
 		}
 	})
 }
