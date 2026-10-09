@@ -49,3 +49,8 @@ func DefaultPaths() (Paths, error) {
 func (p Paths) EnsureDataDir() error {
 	return os.MkdirAll(p.DataDir, dataDirPerm)
 }
+
+// BrowserProfileDir は login と sync が共有するブラウザプロファイルの場所（<data-dir>/kindle-highlight-sync/browser-profile）を返す。ディレクトリは作らない。
+func (p Paths) BrowserProfileDir() string {
+	return filepath.Join(p.DataDir, "browser-profile")
+}
