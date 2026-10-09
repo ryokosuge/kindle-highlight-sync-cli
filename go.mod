@@ -3,6 +3,7 @@ module github.com/ryokosuge/kindle-highlight-sync-cli
 go 1.27
 
 require (
+	github.com/chromedp/cdproto v0.157.8
 	github.com/chromedp/chromedp v0.20.1
 	github.com/gofrs/flock v0.13.1
 	github.com/pelletier/go-toml/v2 v2.4.3
@@ -13,7 +14,6 @@ require (
 )
 
 require (
-	github.com/chromedp/cdproto v0.157.8 // indirect
 	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260213210345-44df1a37e875 // indirect
 	github.com/godbus/dbus/v5 v5.2.2 // indirect
