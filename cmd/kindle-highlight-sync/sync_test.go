@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/lock"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
@@ -84,7 +85,78 @@ func TestSync(t *testing.T) {
 		}
 	})
 
-	t.Run("Notebook を開く action には 1 分の期限が付き、Open に渡す ctx には付かない", func(t *testing.T) {
+	t.Run("Notebook に到達し認証を確かめたあと Book 一覧を最後まで取得して exit 0 で終わり、Book を出力しない", func(t *testing.T) {
+		setupXDG(t, "")
+		b := &fakeBrowser{
+			reached: true,
+			books: []domain.Book{
+				{ID: "book-id-1", Title: "Distinctive Book One"},
+				{ID: "book-id-2", Title: "Distinctive Book Two"},
+			},
+			pageURL:  "https://read.amazon.co.jp/notebook",
+			pageHTML: []byte(`<div id="kp-notebook-library"></div>`),
+		}
+		stubBrowser(t, b, nil)
+
+		code, stderr := runSync(t)
+		if code != 0 {
+			t.Errorf("run(sync) code = %d, want 0", code)
+		}
+		if stderr != "" {
+			t.Errorf("run(sync) stderr = %q, want empty", stderr)
+		}
+		if want := []string{"OpenNotebook", "Page", "ListBooks", "Close"}; !slices.Equal(b.calls, want) {
+			t.Errorf("calls = %v, want %v", b.calls, want)
+		}
+		if b.listCalled != 1 {
+			t.Errorf("ListBooks() called %d times, want 1", b.listCalled)
+		}
+	})
+
+	t.Run("Book 一覧の取得に失敗したら exit 0 で終わらず、その失敗をそのまま返す", func(t *testing.T) {
+		tests := []struct {
+			name       string
+			listErr    error
+			wantCode   int
+			wantStderr string
+		}{
+			{
+				name:       "種類を持たない失敗",
+				listErr:    errors.New("source: list books: page 2: boom"),
+				wantCode:   1,
+				wantStderr: "general error: source: list books: page 2: boom\n",
+			},
+			{
+				name:       "SourceFormat の失敗",
+				listErr:    exitcode.New(exitcode.SourceFormat, errors.New("source: list books: page 1: ...")),
+				wantCode:   7,
+				wantStderr: "source format error: source: list books: page 1: ...\n",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				setupXDG(t, "")
+				b := &fakeBrowser{reached: true, listErr: tt.listErr}
+				stubBrowser(t, b, nil)
+
+				code, stderr := runSync(t)
+				if code != tt.wantCode {
+					t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
+				}
+				if stderr != tt.wantStderr {
+					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
+				}
+				if !b.closed {
+					t.Error("browser not closed")
+				}
+				if b.listCalled != 1 {
+					t.Errorf("ListBooks() called %d times, want 1", b.listCalled)
+				}
+			})
+		}
+	})
+
+	t.Run("Notebook を開く action には 1 分の期限が付き、Open と Book 一覧の取得に渡す ctx には付かない", func(t *testing.T) {
 		setupXDG(t, "")
 		b := &fakeBrowser{reached: true}
 		// stubBrowser は渡った ctx を見ないので、fake を返す関数の中で期限の無いことを確かめる
@@ -106,6 +178,12 @@ func TestSync(t *testing.T) {
 		if wait := b.openDeadline.Sub(b.openCalledAt); wait > time.Minute || wait < 50*time.Second {
 			t.Errorf("OpenNotebook deadline is %v ahead, want 1m", wait)
 		}
+		if b.listCalled != 1 {
+			t.Errorf("ListBooks() called %d times, want 1", b.listCalled)
+		}
+		if !b.listDeadline.IsZero() {
+			t.Errorf("ListBooks ctx has deadline %v, want none", b.listDeadline)
+		}
 	})
 
 	t.Run("Notebook に到達しなかったら exit 0 で終わらない（種類を持たない失敗の exit 1）", func(t *testing.T) {
@@ -123,6 +201,9 @@ func TestSync(t *testing.T) {
 		if !b.closed {
 			t.Error("browser not closed")
 		}
+		if b.listCalled != 0 {
+			t.Errorf("ListBooks() called %d times, want 0", b.listCalled)
+		}
 	})
 
 	t.Run("Notebook を開いた直後に Amazon の認証を確かめる", func(t *testing.T) {
@@ -135,6 +216,7 @@ func TestSync(t *testing.T) {
 			wantCode   int
 			wantStderr string
 			wantCalls  []string
+			wantList   int
 		}{
 			{
 				name:       "認証ページに送られたら exit 2",
@@ -143,6 +225,7 @@ func TestSync(t *testing.T) {
 				wantCode:   2,
 				wantStderr: "Amazon authentication required: sync: redirected to the Amazon sign-in page \"www.amazon.co.jp/ap/signin\"; run `kindle-highlight-sync login` to sign in again\n",
 				wantCalls:  []string{"OpenNotebook", "Page", "Close"},
+				wantList:   0,
 			},
 			{
 				name:       "Notebook の URL に login form があれば exit 2",
@@ -152,6 +235,7 @@ func TestSync(t *testing.T) {
 				wantCode:   2,
 				wantStderr: "Amazon authentication required: sync: a login form is present at \"read.amazon.co.jp/notebook\" without the Kindle Notebook library; run `kindle-highlight-sync login` to sign in again\n",
 				wantCalls:  []string{"OpenNotebook", "Page", "Close"},
+				wantList:   0,
 			},
 			{
 				name:       "認証済みなら exit 0",
@@ -160,6 +244,7 @@ func TestSync(t *testing.T) {
 				pageHTML:   []byte(`<div id="kp-notebook-library"></div>`),
 				wantCode:   0,
 				wantStderr: "",
+				wantList:   1,
 			},
 			{
 				name:       "判定不能でも認証切れにせず exit 0",
@@ -168,6 +253,7 @@ func TestSync(t *testing.T) {
 				pageHTML:   []byte("<p>notebook</p>"),
 				wantCode:   0,
 				wantStderr: "",
+				wantList:   1,
 			},
 			{
 				name:       "判定不能で届いていなければ従来どおり exit 1",
@@ -175,6 +261,7 @@ func TestSync(t *testing.T) {
 				pageHTML:   []byte("<p>other</p>"),
 				wantCode:   1,
 				wantStderr: "general error: sync: kindle notebook not reached\n",
+				wantList:   0,
 			},
 			{
 				name:       "Page の失敗はそのまま返す",
@@ -182,6 +269,7 @@ func TestSync(t *testing.T) {
 				pageErr:    errors.New("source: read page: boom"),
 				wantCode:   1,
 				wantStderr: "general error: source: read page: boom\n",
+				wantList:   0,
 			},
 		}
 		for _, tt := range tests {
@@ -211,6 +299,9 @@ func TestSync(t *testing.T) {
 				if b.pageCalled != 1 {
 					t.Errorf("Page() called %d times, want 1", b.pageCalled)
 				}
+				if b.listCalled != tt.wantList {
+					t.Errorf("ListBooks() called %d times, want %d", b.listCalled, tt.wantList)
+				}
 			})
 		}
 	})
@@ -229,6 +320,9 @@ func TestSync(t *testing.T) {
 		}
 		if !b.closed {
 			t.Error("browser not closed")
+		}
+		if b.listCalled != 0 {
+			t.Errorf("ListBooks() called %d times, want 0", b.listCalled)
 		}
 	})
 
@@ -251,16 +345,18 @@ func TestSync(t *testing.T) {
 		tests := []struct {
 			name       string
 			reached    bool
+			listErr    error
 			wantCode   int
 			wantStderr string
 		}{
 			{name: "到達して閉じるのに失敗", reached: true, wantCode: 5, wantStderr: "browser error: source: close browser: boom\n"},
 			{name: "未到達を優先する", reached: false, wantCode: 1, wantStderr: "general error: sync: kindle notebook not reached\n"},
+			{name: "取得の失敗を優先する", reached: true, listErr: errors.New("source: list books: page 1: boom"), wantCode: 1, wantStderr: "general error: source: list books: page 1: boom\n"},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				setupXDG(t, "")
-				stubBrowser(t, &fakeBrowser{reached: tt.reached, closeErr: closeErr}, nil)
+				stubBrowser(t, &fakeBrowser{reached: tt.reached, listErr: tt.listErr, closeErr: closeErr}, nil)
 
 				code, stderr := runSync(t)
 				if code != tt.wantCode {

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
 
@@ -10,6 +11,7 @@ import (
 type browser interface {
 	OpenNotebook(ctx context.Context) (bool, error)
 	Page(ctx context.Context) (finalURL string, html []byte, err error)
+	ListBooks(ctx context.Context) ([]domain.Book, error)
 	WaitNotebook(ctx context.Context) error
 	Close() error
 }
