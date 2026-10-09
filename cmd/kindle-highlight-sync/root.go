@@ -53,6 +53,7 @@ func newRootCmdWith(a *app) *cobra.Command {
 		return nil
 	}
 	root.AddCommand(newSyncCmd(a))
+	root.AddCommand(newLoginCmd(a))
 	root.AddCommand(newInitCmd(a))
 	return root
 }
