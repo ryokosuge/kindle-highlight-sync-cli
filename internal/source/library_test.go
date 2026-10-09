@@ -1,6 +1,7 @@
 package source
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 )
 
 func date(year int, month time.Month, day int) *time.Time {
@@ -40,9 +42,10 @@ func formatBooks(books []domain.Book) string {
 
 func TestParseLibraryPage(t *testing.T) {
 	tests := []struct {
-		name    string
-		fixture string
-		want    LibraryPage
+		name     string
+		fixture  string
+		fragment bool // true なら ParseLibraryFragment、false なら ParseLibraryPage で解析する
+		want     LibraryPage
 	}{
 		{
 			name:    "続きのある 1 ページ目",
@@ -56,8 +59,14 @@ func TestParseLibraryPage(t *testing.T) {
 			},
 		},
 		{
-			name:    "続きのある 2 ページ目以降の断片",
-			fixture: "library_next.html",
+			name:    "root はあるが Book が 0 冊で続きの無い 1 ページ目",
+			fixture: "library_first_empty.html",
+			want:    LibraryPage{},
+		},
+		{
+			name:     "続きのある 2 ページ目以降の断片",
+			fixture:  "library_next.html",
+			fragment: true,
 			want: LibraryPage{
 				Books: []domain.Book{
 					{ID: "AAAAAAAAA3", ASIN: "AAAAAAAAA3", Title: "合成の書名 C", Author: "合成 著者 C", LastAnnotatedAt: date(2026, time.March, 1)},
@@ -67,13 +76,15 @@ func TestParseLibraryPage(t *testing.T) {
 			},
 		},
 		{
-			name:    "Book が 0 件でも続きのある断片",
-			fixture: "library_empty.html",
-			want:    LibraryPage{NextToken: "aaaa9999CCCC%2Baaaa9999%3D"},
+			name:     "Book が 0 件でも続きのある断片",
+			fixture:  "library_empty.html",
+			fragment: true,
+			want:     LibraryPage{NextToken: "aaaa9999CCCC%2Baaaa9999%3D"},
 		},
 		{
-			name:    "最後のページ",
-			fixture: "library_last.html",
+			name:     "最後のページ",
+			fixture:  "library_last.html",
+			fragment: true,
 			want: LibraryPage{
 				Books: []domain.Book{
 					{ID: "AAAAAAAAA5", ASIN: "AAAAAAAAA5", Title: "合成の書名 F", Author: "合成 著者 F", LastAnnotatedAt: date(2026, time.January, 5)},
@@ -81,8 +92,9 @@ func TestParseLibraryPage(t *testing.T) {
 			},
 		},
 		{
-			name:    "ASIN の無い Book",
-			fixture: "library_no_asin.html",
+			name:     "ASIN の無い Book",
+			fixture:  "library_no_asin.html",
+			fragment: true,
 			want: LibraryPage{
 				Books: []domain.Book{
 					{ID: "b1-b2a5dc299814d91a43fac695591953db", Title: "合成の書名 ASIN なし", Author: "合成 著者 E", LastAnnotatedAt: date(2024, time.February, 29)},
@@ -92,18 +104,27 @@ func TestParseLibraryPage(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseLibraryPage(readFixture(t, tt.fixture))
+			name, parse := libraryParser(tt.fragment)
+			got, err := parse(readFixture(t, tt.fixture))
 			if err != nil {
-				t.Fatalf("ParseLibraryPage(%s) error = %v", tt.fixture, err)
+				t.Fatalf("%s(%s) error = %v", name, tt.fixture, err)
 			}
 			if !reflect.DeepEqual(got.Books, tt.want.Books) {
-				t.Errorf("ParseLibraryPage(%s).Books = %s, want %s", tt.fixture, formatBooks(got.Books), formatBooks(tt.want.Books))
+				t.Errorf("%s(%s).Books = %s, want %s", name, tt.fixture, formatBooks(got.Books), formatBooks(tt.want.Books))
 			}
 			if got.NextToken != tt.want.NextToken {
-				t.Errorf("ParseLibraryPage(%s).NextToken = %q, want %q", tt.fixture, got.NextToken, tt.want.NextToken)
+				t.Errorf("%s(%s).NextToken = %q, want %q", name, tt.fixture, got.NextToken, tt.want.NextToken)
 			}
 		})
 	}
+}
+
+// libraryParser は fragment に応じて ParseLibraryFragment / ParseLibraryPage とその名前を返す。
+func libraryParser(fragment bool) (string, func([]byte) (LibraryPage, error)) {
+	if fragment {
+		return "ParseLibraryFragment", ParseLibraryFragment
+	}
+	return "ParseLibraryPage", ParseLibraryPage
 }
 
 func TestParseLibraryPageError(t *testing.T) {
@@ -111,20 +132,35 @@ func TestParseLibraryPageError(t *testing.T) {
 		title  = "合成の書名 エラー"
 		author = "合成 著者 エラー"
 	)
+	// bookHTML は root の中に Book 2 冊を置き、2 冊目の Last Annotated Date を dateValue にした 1 ページ目の HTML。
 	bookHTML := func(dateValue string) string {
-		return `<div id="AAAAAAAAA1" class="a-row kp-notebook-library-each-book">` +
+		return `<div id="kp-notebook-library" class="a-row">` +
+			`<div id="AAAAAAAAA1" class="a-row kp-notebook-library-each-book">` +
 			`<h2 class="kp-notebook-searchable">合成の書名 A</h2><p class="kp-notebook-searchable">合成 著者 A</p>` +
 			`<input type="hidden" id="kp-notebook-annotated-date-AAAAAAAAA1" value="2026年10月8日木曜日"></div>` +
 			`<div id="AAAAAAAAA2" class="a-row kp-notebook-library-each-book">` +
 			`<h2 class="kp-notebook-searchable">` + title + `</h2><p class="kp-notebook-searchable">` + author + `</p>` +
-			`<input type="hidden" id="kp-notebook-annotated-date-AAAAAAAAA2" value="` + dateValue + `"></div>` +
+			`<input type="hidden" id="kp-notebook-annotated-date-AAAAAAAAA2" value="` + dateValue + `"></div></div>` +
 			`<input type="hidden" class="kp-notebook-library-next-page-start" value="">`
 	}
+	// oneBookHTML は root の無い Book 1 冊の断片。続きの印は tail で足す。
+	oneBookHTML := func(tail string) string {
+		return `<div id="AAAAAAAAA1" class="a-row kp-notebook-library-each-book">` +
+			`<h2 class="kp-notebook-searchable">` + title + `</h2><p class="kp-notebook-searchable">` + author + `</p></div>` + tail
+	}
+	const (
+		wantNoRoot      = "source: library page: notebook root container is missing: unexpected notebook structure"
+		wantNoNextInput = "source: library page: next page token input is missing: unexpected notebook structure"
+		wantNoNextValue = "source: library page: next page token input has no value attribute: unexpected notebook structure"
+	)
 	tests := []struct {
-		name    string
-		html    string
-		want    string
-		notWant []string
+		name       string
+		fixture    string // 空なら html を使う
+		html       string
+		fragment   bool // true なら ParseLibraryFragment、false なら ParseLibraryPage で解析する
+		want       string
+		wantFormat bool // true なら exit 7 の SourceFormat（ErrSourceFormat）、false なら種類なし（exit 1）
+		notWant    []string
 	}{
 		{
 			name:    "月と日がゼロ埋め",
@@ -163,19 +199,48 @@ func TestParseLibraryPageError(t *testing.T) {
 			notWant: []string{title, author, "2026年10月8日金曜日"},
 		},
 		{
-			name: "続きの token の input が無い",
-			html: `<div id="AAAAAAAAA1" class="a-row kp-notebook-library-each-book">` +
-				`<h2 class="kp-notebook-searchable">` + title + `</h2><p class="kp-notebook-searchable">` + author + `</p></div>`,
-			want:    "source: library page: next page token input is missing",
-			notWant: []string{title, author},
+			name:       "1 ページ目に root（Book 一覧の container）が無い",
+			fixture:    "library_no_root.html",
+			want:       wantNoRoot,
+			wantFormat: true,
+			notWant:    []string{"合成の書名 root なし", "合成 著者 root なし", "AAAAAAAAA1", "<div", "kp-notebook"},
 		},
 		{
-			name: "続きの token の input に value 属性が無い",
-			html: `<div id="AAAAAAAAA1" class="a-row kp-notebook-library-each-book">` +
-				`<h2 class="kp-notebook-searchable">` + title + `</h2><p class="kp-notebook-searchable">` + author + `</p></div>` +
-				`<input type="hidden" class="kp-notebook-library-next-page-start">`,
-			want:    "source: library page: next page token input has no value attribute",
-			notWant: []string{title, author, "<input"},
+			name:       "1 ページ目に root も続きの印も無い（root の検査が先）",
+			html:       oneBookHTML(""),
+			want:       wantNoRoot,
+			wantFormat: true,
+			notWant:    []string{title, author},
+		},
+		{
+			name:       "1 ページ目に続きの token も最後のページの印も無い",
+			fixture:    "library_no_end_marker.html",
+			want:       wantNoNextInput,
+			wantFormat: true,
+			notWant:    []string{"合成の書名 印なし", "合成 著者 印なし", "AAAAAAAAA1", "<div", "kp-notebook"},
+		},
+		{
+			name:       "断片に続きの token も最後のページの印も無い",
+			html:       oneBookHTML(""),
+			fragment:   true,
+			want:       wantNoNextInput,
+			wantFormat: true,
+			notWant:    []string{title, author},
+		},
+		{
+			name:       "1 ページ目の続きの token の input に value 属性が無い",
+			html:       `<div id="kp-notebook-library" class="a-row">` + oneBookHTML("") + `</div><input type="hidden" class="kp-notebook-library-next-page-start">`,
+			want:       wantNoNextValue,
+			wantFormat: true,
+			notWant:    []string{title, author, "<input"},
+		},
+		{
+			name:       "断片の続きの token の input に value 属性が無い",
+			html:       oneBookHTML(`<input type="hidden" class="kp-notebook-library-next-page-start">`),
+			fragment:   true,
+			want:       wantNoNextValue,
+			wantFormat: true,
+			notWant:    []string{title, author, "<input"},
 		},
 		{
 			name:    "HTML として解析できない",
@@ -183,21 +248,43 @@ func TestParseLibraryPageError(t *testing.T) {
 			want:    "source: library page: parse HTML: html: open stack of elements exceeds 512 nodes",
 			notWant: []string{title, author},
 		},
+		{
+			name:     "断片が HTML として解析できない",
+			html:     strings.Repeat("<div>", 600) + title + author,
+			fragment: true,
+			want:     "source: library page: parse HTML: html: open stack of elements exceeds 512 nodes",
+			notWant:  []string{title, author},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ParseLibraryPage([]byte(tt.html))
+			html := []byte(tt.html)
+			if tt.fixture != "" {
+				html = readFixture(t, tt.fixture)
+			}
+			name, parse := libraryParser(tt.fragment)
+			_, err := parse(html)
 			if err == nil {
-				t.Fatal("ParseLibraryPage() error = nil, want error")
+				t.Fatalf("%s() error = nil, want error", name)
 			}
 			msg := err.Error()
 			if msg != tt.want {
-				t.Errorf("ParseLibraryPage() error = %q, want %q", msg, tt.want)
+				t.Errorf("%s() error = %q, want %q", name, msg, tt.want)
 			}
 			for _, s := range tt.notWant {
 				if strings.Contains(msg, s) {
-					t.Errorf("ParseLibraryPage() error = %q, want it not to contain %q", msg, s)
+					t.Errorf("%s() error = %q, want it not to contain %q", name, msg, s)
 				}
+			}
+			wantCode := 1
+			if tt.wantFormat {
+				wantCode = 7
+			}
+			if got := exitcode.Code(err); got != wantCode {
+				t.Errorf("exitcode.Code(err) = %d, want %d", got, wantCode)
+			}
+			if errors.Is(err, ErrSourceFormat) != tt.wantFormat {
+				t.Errorf("errors.Is(err, ErrSourceFormat) = %v, want %v", !tt.wantFormat, tt.wantFormat)
 			}
 		})
 	}

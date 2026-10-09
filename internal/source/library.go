@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	librarySelectorRoot      = "#kp-notebook-library"
 	librarySelectorBook      = "div.kp-notebook-library-each-book"
 	librarySelectorTitle     = "h2.kp-notebook-searchable"
 	librarySelectorAuthor    = "p.kp-notebook-searchable"
@@ -23,11 +24,9 @@ const (
 )
 
 var (
-	errLibraryNextTokenMissing = errors.New("source: library page: next page token input is missing")
-	errLibraryNextTokenNoValue = errors.New("source: library page: next page token input has no value attribute")
-	errAnnotatedDateForm       = errors.New("last annotated date is not in the YYYY年M月D日<曜日> form")
-	errAnnotatedDateCalendar   = errors.New("last annotated date is not a valid calendar date")
-	errAnnotatedDateWeekday    = errors.New("last annotated date has a weekday that does not match the date")
+	errAnnotatedDateForm     = errors.New("last annotated date is not in the YYYY年M月D日<曜日> form")
+	errAnnotatedDateCalendar = errors.New("last annotated date is not a valid calendar date")
+	errAnnotatedDateWeekday  = errors.New("last annotated date has a weekday that does not match the date")
 
 	annotatedDatePattern = regexp.MustCompile(`^([0-9]{4})年([1-9]|1[0-2])月([1-9]|[12][0-9]|3[01])日([日月火水木金土])曜日$`)
 	weekdayNames         = [...]string{"日", "月", "火", "水", "木", "金", "土"}
@@ -39,21 +38,37 @@ type LibraryPage struct {
 	NextToken string // 空なら最後のページ
 }
 
-// ParseLibraryPage は Notebook の Book 一覧 1 ページの HTML を解析する。
+// ParseLibraryPage は Notebook の Book 一覧 1 ページ目の HTML を解析する。
+// root（#kp-notebook-library）と続きの印が無ければ SourceFormat の種類のエラーを返す。
+// 2 ページ目以降は root を持たない断片なので ParseLibraryFragment を使う（仕様書 §18.4）。
 func ParseLibraryPage(html []byte) (LibraryPage, error) {
+	return parseLibrary(html, true)
+}
+
+// ParseLibraryFragment は Notebook の Book 一覧 2 ページ目以降の断片 HTML を解析する。
+// 続きの印が無ければ SourceFormat の種類のエラーを返す。
+func ParseLibraryFragment(html []byte) (LibraryPage, error) {
+	return parseLibrary(html, false)
+}
+
+func parseLibrary(html []byte, wantRoot bool) (LibraryPage, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(html))
 	if err != nil {
 		return LibraryPage{}, fmt.Errorf("source: library page: parse HTML: %w", err)
 	}
 
+	if wantRoot && doc.Find(librarySelectorRoot).Length() == 0 {
+		return LibraryPage{}, fmt.Errorf("source: library page: %w", newFormatError("notebook root container is missing"))
+	}
+
 	next := doc.Find(librarySelectorNextToken).First()
 	if next.Length() == 0 {
-		return LibraryPage{}, errLibraryNextTokenMissing
+		return LibraryPage{}, fmt.Errorf("source: library page: %w", newFormatError("next page token input is missing"))
 	}
 
 	token, ok := next.Attr("value")
 	if !ok {
-		return LibraryPage{}, errLibraryNextTokenNoValue
+		return LibraryPage{}, fmt.Errorf("source: library page: %w", newFormatError("next page token input has no value attribute"))
 	}
 
 	page := LibraryPage{NextToken: token}
