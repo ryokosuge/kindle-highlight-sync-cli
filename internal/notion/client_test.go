@@ -240,6 +240,30 @@ func TestDeadlineExceeded(t *testing.T) {
 	}
 }
 
+func TestHTTPTimeout(t *testing.T) {
+	t.Run("既定は30秒", func(t *testing.T) {
+		if got := New(testToken).http.Timeout; got != 30*time.Second {
+			t.Errorf("HTTP timeout = %s, want %s", got, 30*time.Second)
+		}
+	})
+
+	t.Run("応答が timeout を超えると exit 4", func(t *testing.T) {
+		client := newTestClient(t, func(_ http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(2 * time.Second):
+			}
+		}, withHTTPTimeout(50*time.Millisecond))
+		start := time.Now()
+		_, err := client.RetrieveDatabase(context.Background(), "db-1")
+		elapsed := time.Since(start)
+		assertNotionError(t, err, "notion: GET /v1/databases/db-1", "Client.Timeout exceeded")
+		if elapsed >= time.Second {
+			t.Errorf("request took %s, want under 1s", elapsed)
+		}
+	})
+}
+
 func assertChainHidesToken(t *testing.T, err error) {
 	t.Helper()
 	for e := err; e != nil; e = errors.Unwrap(e) {

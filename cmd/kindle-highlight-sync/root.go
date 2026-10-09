@@ -13,6 +13,9 @@ import (
 // cobraDefaultCmds は cobra が root に足す子コマンド。壊れた config.toml でも動くように前処理を飛ばす。
 var cobraDefaultCmds = map[string]bool{"help": true, "completion": true, cobra.ShellCompRequestCmd: true}
 
+// ignoreConfigErrorAnnotation を Annotations に持つ子コマンドでは、前処理の config.toml の読み込み失敗を無視する（a.config は nil）。
+const ignoreConfigErrorAnnotation = "kindle-highlight-sync/ignore-config-error"
+
 type app struct {
 	paths  config.Paths
 	config *config.Config // config.toml が無ければ nil
@@ -43,13 +46,14 @@ func newRootCmdWith(a *app) *cobra.Command {
 		cfg, err := config.Load(p.ConfigFile)
 		switch {
 		case errors.Is(err, fs.ErrNotExist):
-		case err != nil:
+		case err != nil && cmd.Annotations[ignoreConfigErrorAnnotation] == "":
 			return exitcode.New(exitcode.ConfigRequired, err)
 		}
 		a.paths, a.config = p, cfg
 		return nil
 	}
 	root.AddCommand(newSyncCmd(a))
+	root.AddCommand(newInitCmd(a))
 	return root
 }
 
