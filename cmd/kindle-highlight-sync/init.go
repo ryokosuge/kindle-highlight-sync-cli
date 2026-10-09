@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"strings"
@@ -90,7 +91,7 @@ func runInit(cmd *cobra.Command, a *app, databaseID string, force, yes bool) err
 	if err != nil {
 		return err
 	}
-	mapping, err := initMapping(p, ds, yes)
+	mapping, err := initMapping(cmd.ErrOrStderr(), p, ds, yes)
 	if err != nil {
 		return err
 	}
@@ -190,7 +191,15 @@ func initDataSource(cmd *cobra.Command, client *notion.Client, id string, p *pro
 	return db.DataSources[i], nil
 }
 
-func initMapping(p *prompter, ds *notion.DataSource, yes bool) (config.Mapping, error) {
+func initMapping(w io.Writer, p *prompter, ds *notion.DataSource, yes bool) (config.Mapping, error) {
+	check := notion.CheckMapping(ds.Properties)
+	if err := check.Err(); err != nil {
+		return config.Mapping{}, err
+	}
+	for _, line := range check.SkippedLines() {
+		_, _ = fmt.Fprintln(w, line)
+	}
+
 	defaults, missing := notion.DefaultMapping(ds.Properties)
 	if yes {
 		if len(missing) > 0 {
