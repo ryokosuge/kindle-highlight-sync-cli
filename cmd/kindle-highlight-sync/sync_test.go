@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -133,6 +134,7 @@ func TestSync(t *testing.T) {
 			pageErr    error
 			wantCode   int
 			wantStderr string
+			wantCalls  []string
 		}{
 			{
 				name:       "認証ページに送られたら exit 2",
@@ -140,6 +142,7 @@ func TestSync(t *testing.T) {
 				pageHTML:   []byte("<p>sign in</p>"),
 				wantCode:   2,
 				wantStderr: "Amazon authentication required: sync: redirected to the Amazon sign-in page \"www.amazon.co.jp/ap/signin\"; run `kindle-highlight-sync login` to sign in again\n",
+				wantCalls:  []string{"OpenNotebook", "Page", "Close"},
 			},
 			{
 				name:       "Notebook の URL に login form があれば exit 2",
@@ -148,6 +151,7 @@ func TestSync(t *testing.T) {
 				pageHTML:   []byte(`<form name="signIn"><input name="email"></form>`),
 				wantCode:   2,
 				wantStderr: "Amazon authentication required: sync: a login form is present at \"read.amazon.co.jp/notebook\" without the Kindle Notebook library; run `kindle-highlight-sync login` to sign in again\n",
+				wantCalls:  []string{"OpenNotebook", "Page", "Close"},
 			},
 			{
 				name:       "認証済みなら exit 0",
@@ -198,12 +202,8 @@ func TestSync(t *testing.T) {
 				if stderr != tt.wantStderr {
 					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
 				}
-				if tt.name == "認証ページに送られたら exit 2" {
-					for _, secret := range []string{"openid", "secret-fragment"} {
-						if strings.Contains(stderr, secret) {
-							t.Errorf("run(sync) stderr = %q, want no %q", stderr, secret)
-						}
-					}
+				if tt.wantCalls != nil && !slices.Equal(b.calls, tt.wantCalls) {
+					t.Errorf("calls = %v, want %v", b.calls, tt.wantCalls)
 				}
 				if !b.closed {
 					t.Error("browser not closed")

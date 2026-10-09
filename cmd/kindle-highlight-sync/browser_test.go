@@ -19,6 +19,7 @@ type fakeBrowser struct {
 	pageHTML   []byte
 	pageErr    error
 	pageCalled int
+	calls      []string // 呼ばれたメソッドの順
 
 	openDeadline time.Time // OpenNotebook に渡った ctx の期限（無ければゼロ値）
 	openCalledAt time.Time
@@ -28,23 +29,27 @@ type fakeBrowser struct {
 }
 
 func (f *fakeBrowser) OpenNotebook(ctx context.Context) (bool, error) {
+	f.calls = append(f.calls, "OpenNotebook")
 	f.openCalledAt = time.Now()
 	f.openDeadline, _ = ctx.Deadline()
 	return f.reached, f.openErr
 }
 
 func (f *fakeBrowser) Page(context.Context) (string, []byte, error) {
+	f.calls = append(f.calls, "Page")
 	f.pageCalled++
 	return f.pageURL, f.pageHTML, f.pageErr
 }
 
 func (f *fakeBrowser) WaitNotebook(ctx context.Context) error {
+	f.calls = append(f.calls, "WaitNotebook")
 	f.waitCalledAt = time.Now()
 	f.waitDeadline, _ = ctx.Deadline()
 	return f.waitErr
 }
 
 func (f *fakeBrowser) Close() error {
+	f.calls = append(f.calls, "Close")
 	f.closed = true
 	if f.onClose != nil {
 		f.onClose()
