@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,15 +41,20 @@ type fakeLibraryPage struct {
 }
 
 // fakeLibraryFetch は token ごとの fakeLibraryPage に答える fetchPage と、呼ばれた token の記録を返す。
-// map に無い token で呼ばれたらテストを失敗させる。
+// map に無い token や、同じ token で 2 度呼ばれたらテストを失敗させる。
 func fakeLibraryFetch(t *testing.T, pages map[string]fakeLibraryPage, cancel context.CancelFunc) (fetchPage, *[]string) {
 	t.Helper()
 	var mu sync.Mutex
 	calls := []string{}
 	return func(ctx context.Context, token string) ([]byte, error) {
 		mu.Lock()
+		repeated := slices.Contains(calls, token)
 		calls = append(calls, token)
 		mu.Unlock()
+		if repeated {
+			t.Errorf("fetch(ctx, %q): called twice with the same token", token)
+			return nil, errors.New("called twice with the same token")
+		}
 		p, ok := pages[token]
 		if !ok {
 			t.Errorf("fetch(ctx, %q): token is not in the fake library pages", token)
