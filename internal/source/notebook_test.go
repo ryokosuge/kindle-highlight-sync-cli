@@ -5,7 +5,9 @@ import (
 	"errors"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -61,6 +63,17 @@ type fakeAmazon struct {
 	signedIn atomic.Bool
 	// signInOnSignInPage が true なら、認証ページを返したところで signedIn にし、ページの JS で Notebook に戻る（本人のサインインに当たる）。
 	signInOnSignInPage bool
+	// library が nil でなければ、サインイン済みの Notebook はクエリごとの HTML を返し、受けたクエリを libraryQueries に残す。
+	library map[string][]byte
+	mu      sync.Mutex
+	queries []string
+}
+
+// libraryQueries は、これまで Notebook に来たクエリ（u.RawQuery）を順番に返す。
+func (f *fakeAmazon) libraryQueries() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.queries)
 }
 
 func (f *fakeAmazon) respond(raw string) fetch.FulfillRequestParams {
@@ -72,7 +85,17 @@ func (f *fakeAmazon) respond(raw string) fetch.FulfillRequestParams {
 	switch u.Host + u.Path {
 	case "read.amazon.co.jp/notebook":
 		if f.signedIn.Load() {
-			return fetch.FulfillRequestParams{ResponseCode: 200, ResponseHeaders: html, Body: []byte("<p>notebook</p>")}
+			if f.library == nil {
+				return fetch.FulfillRequestParams{ResponseCode: 200, ResponseHeaders: html, Body: []byte("<p>notebook</p>")}
+			}
+			f.mu.Lock()
+			f.queries = append(f.queries, u.RawQuery)
+			f.mu.Unlock()
+			body, ok := f.library[u.RawQuery]
+			if !ok {
+				return fetch.FulfillRequestParams{ResponseCode: 404}
+			}
+			return fetch.FulfillRequestParams{ResponseCode: 200, ResponseHeaders: html, Body: body}
 		}
 		return fetch.FulfillRequestParams{ResponseCode: 302, ResponseHeaders: []*fetch.HeaderEntry{{Name: "Location", Value: signInURL}}}
 	case "www.amazon.co.jp/ap/signin":
