@@ -5,21 +5,26 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
 
 // fakeBrowser は openBrowser の差し替えが返すブラウザ。CI に Chrome は無いので、本物は開かない。
 type fakeBrowser struct {
-	reached    bool  // OpenNotebook が返す
-	openErr    error // OpenNotebook が返す
-	waitErr    error // WaitNotebook が返す
-	closeErr   error // Close が返す
-	onClose    func()
-	pageURL    string
-	pageHTML   []byte
-	pageErr    error
-	pageCalled int
-	calls      []string // 呼ばれたメソッドの順
+	reached      bool  // OpenNotebook が返す
+	openErr      error // OpenNotebook が返す
+	waitErr      error // WaitNotebook が返す
+	closeErr     error // Close が返す
+	onClose      func()
+	pageURL      string
+	pageHTML     []byte
+	pageErr      error
+	pageCalled   int
+	books        []domain.Book
+	listErr      error
+	listCalled   int
+	listDeadline time.Time
+	calls        []string // 呼ばれたメソッドの順
 
 	openDeadline time.Time // OpenNotebook に渡った ctx の期限（無ければゼロ値）
 	openCalledAt time.Time
@@ -39,6 +44,13 @@ func (f *fakeBrowser) Page(context.Context) (string, []byte, error) {
 	f.calls = append(f.calls, "Page")
 	f.pageCalled++
 	return f.pageURL, f.pageHTML, f.pageErr
+}
+
+func (f *fakeBrowser) ListBooks(ctx context.Context) ([]domain.Book, error) {
+	f.calls = append(f.calls, "ListBooks")
+	f.listCalled++
+	f.listDeadline, _ = ctx.Deadline()
+	return f.books, f.listErr
 }
 
 func (f *fakeBrowser) WaitNotebook(ctx context.Context) error {
