@@ -26,6 +26,8 @@ type Options struct {
 
 // Browser は Open で起動した Chrome。使い終わったら Close する。
 type Browser struct {
+	// parent は Open に渡された ctx。Close が、Chrome が終わった理由が取り消しかどうかを見分けるのに使う。
+	parent      context.Context
 	ctx         context.Context
 	cancel      context.CancelFunc
 	cancelAlloc context.CancelFunc
@@ -58,13 +60,14 @@ func Open(ctx context.Context, opts Options) (*Browser, error) {
 		cancelAlloc()
 		return nil, exitcode.New(exitcode.Browser, fmt.Errorf("source: start browser: %w", err))
 	}
-	return &Browser{ctx: bctx, cancel: cancel, cancelAlloc: cancelAlloc}, nil
+	return &Browser{parent: ctx, ctx: bctx, cancel: cancel, cancelAlloc: cancelAlloc}, nil
 }
 
 // Close は Chrome に閉じる要求を出し、Chrome のプロセスが終わるまで待ってから戻る。
 // Chrome が closeTimeout までに応じなければ kill して、終わるまで待つ。
 // Chrome が既に終わっていれば（window が閉じられた、ctx が切れた）待つだけで nil を返す。
-// 閉じる要求に失敗したときは、終わるのを待ってから exitcode.Browser の種類のエラーを返す。
+// 閉じる要求の最中に Open の ctx が取り消されたときも、終わるのを待ってから nil を返す。
+// それ以外で閉じる要求に失敗したときは、終わるのを待ってから exitcode.Browser の種類のエラーを返す。
 func (b *Browser) Close() error {
 	var err error
 	if b.ctx.Err() == nil {
@@ -74,7 +77,7 @@ func (b *Browser) Close() error {
 	}
 	b.cancel()
 	b.cancelAlloc()
-	if err != nil {
+	if err != nil && b.parent.Err() == nil {
 		return exitcode.New(exitcode.Browser, fmt.Errorf("source: close browser: %w", err))
 	}
 	return nil

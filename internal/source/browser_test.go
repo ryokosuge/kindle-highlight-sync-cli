@@ -1,9 +1,12 @@
 package source
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/exec"
@@ -11,6 +14,7 @@ import (
 	"slices"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/chromedp/chromedp"
 
@@ -143,6 +147,135 @@ func TestOpen(t *testing.T) {
 			t.Errorf("log output = %q, want empty", logs.String())
 		}
 	})
+}
+
+func TestClose(t *testing.T) {
+	t.Run("Browser.close の応答を待つ間に Open の ctx が取り消されても、Chrome が終わってから nil で戻る", func(t *testing.T) {
+		execPath, closing := fakeCDPChrome(t, "hang")
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		b, err := Open(ctx, Options{Headless: true, ProfileDir: filepath.Join(t.TempDir(), "browser-profile"), ExecPath: execPath})
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		proc := chromedp.FromContext(b.ctx).Browser.Process()
+
+		go func() {
+			waitFile(closing)
+			cancel()
+		}()
+		if err := b.Close(); err != nil {
+			t.Fatalf("Close() error = %v, want nil", err)
+		}
+		if err := proc.Signal(syscall.Signal(0)); !errors.Is(err, os.ErrProcessDone) {
+			t.Errorf("Chrome process after Close: Signal() error = %v, want os.ErrProcessDone", err)
+		}
+	})
+
+	t.Run("Chrome が Browser.close をエラーで返したら、Chrome が終わってから exit 5 の種類で失敗する", func(t *testing.T) {
+		execPath, _ := fakeCDPChrome(t, "error")
+		b, err := Open(context.Background(), Options{Headless: true, ProfileDir: filepath.Join(t.TempDir(), "browser-profile"), ExecPath: execPath})
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		proc := chromedp.FromContext(b.ctx).Browser.Process()
+
+		err = b.Close()
+		if got := exitcode.Code(err); got != 5 {
+			t.Errorf("exitcode.Code(err) = %d, want 5 (err = %v)", got, err)
+		}
+		if err := proc.Signal(syscall.Signal(0)); !errors.Is(err, os.ErrProcessDone) {
+			t.Errorf("Chrome process after Close: Signal() error = %v, want os.ErrProcessDone", err)
+		}
+	})
+}
+
+// fakeCDPEnv が付いて起動されたテストバイナリは、TestFakeCDPChrome で偽の Chrome として振る舞う。
+const fakeCDPEnv = "KHS_FAKE_CDP_CLOSE"
+
+// fakeCDPChrome は、chromedp が Open で送る CDP に応じる偽 Chrome を作る。
+// Browser.close を受けると closing のファイルを作り、closeMode が "hang" なら応じず、"error" ならエラーで応じる。
+func fakeCDPChrome(t *testing.T, closeMode string) (execPath, closing string) {
+	t.Helper()
+	dir := t.TempDir()
+	execPath = filepath.Join(dir, "fake-chrome")
+	closing = filepath.Join(dir, "closing")
+	script := fmt.Sprintf("#!/bin/sh\n%s=%s KHS_FAKE_CDP_CLOSING=%s exec %s -test.run='^TestFakeCDPChrome$'\n", fakeCDPEnv, closeMode, closing, os.Args[0])
+	if err := os.WriteFile(execPath, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return execPath, closing
+}
+
+func waitFile(path string) {
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestFakeCDPChrome は fakeCDPChrome から起動されたときだけ、fd 3 で CDP を受けて fd 4 に返す。
+func TestFakeCDPChrome(t *testing.T) {
+	closeMode := os.Getenv(fakeCDPEnv)
+	if closeMode == "" {
+		return
+	}
+	in := bufio.NewReader(os.NewFile(3, "cdp-in"))
+	out := os.NewFile(4, "cdp-out")
+	send := func(v any) {
+		b, err := json.Marshal(v)
+		if err != nil {
+			panic(err)
+		}
+		if _, err := out.Write(append(b, 0)); err != nil {
+			os.Exit(0)
+		}
+	}
+	for {
+		raw, err := in.ReadBytes(0)
+		if err != nil {
+			os.Exit(0)
+		}
+		var msg struct {
+			ID        int64  `json:"id"`
+			Method    string `json:"method"`
+			SessionID string `json:"sessionId,omitempty"`
+		}
+		if err := json.Unmarshal(raw[:len(raw)-1], &msg); err != nil {
+			panic(err)
+		}
+		reply := map[string]any{"id": msg.ID, "result": map[string]any{}}
+		if msg.SessionID != "" {
+			reply["sessionId"] = msg.SessionID
+		}
+		switch msg.Method {
+		case "Target.attachToTarget":
+			reply["result"] = map[string]any{"sessionId": "fake-session"}
+		case "Runtime.evaluate":
+			reply["result"] = map[string]any{"result": map[string]any{"type": "object", "className": "Window"}}
+		case "Browser.close":
+			if err := os.WriteFile(os.Getenv("KHS_FAKE_CDP_CLOSING"), nil, 0o600); err != nil {
+				panic(err)
+			}
+			if closeMode == "hang" {
+				continue
+			}
+			delete(reply, "result")
+			reply["error"] = map[string]any{"code": -32000, "message": "fake close failure"}
+		}
+		send(reply)
+		if msg.Method == "Target.setDiscoverTargets" && msg.SessionID == "" {
+			send(map[string]any{
+				"method": "Target.targetCreated",
+				"params": map[string]any{"targetInfo": map[string]any{
+					"targetId": "fake-target", "type": "page", "title": "", "url": "about:blank",
+					"attached": false, "canAccessOpener": false,
+				}},
+			})
+		}
+	}
 }
 
 // fakeChrome は、chromedp が --remote-debugging-pipe で渡す fd 4 に id も method も無いメッセージを 1 つ書いて終わる実行ファイルを作る。
