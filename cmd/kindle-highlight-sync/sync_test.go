@@ -68,15 +68,15 @@ func TestSync(t *testing.T) {
 	t.Run("Notebook を開く action には 1 分の期限が付き、Open に渡す ctx には付かない", func(t *testing.T) {
 		setupXDG(t, "")
 		b := &fakeBrowser{reached: true}
-		origOpen := openBrowser
-		openBrowser = func(ctx context.Context, opts source.Options) (browser, error) {
+		// stubBrowser は渡った ctx を見ないので、fake を返す関数の中で期限の無いことを確かめる
+		orig := openBrowser
+		openBrowser = func(ctx context.Context, _ source.Options) (browser, error) {
 			if d, ok := ctx.Deadline(); ok {
 				t.Errorf("openBrowser ctx has deadline %v, want none", d)
 			}
-			return origOpen(ctx, opts)
+			return b, nil
 		}
-		t.Cleanup(func() { openBrowser = origOpen })
-		stubBrowser(t, b, nil)
+		t.Cleanup(func() { openBrowser = orig })
 
 		if code, stderr := runSync(t); code != 0 {
 			t.Fatalf("run(sync) code = %d, stderr = %q, want 0", code, stderr)
