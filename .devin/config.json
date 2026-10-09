@@ -1,0 +1,9 @@
+{
+  "requiredPlugins": [
+    {
+      "source": "git-subdir",
+      "url": "https://github.com/ryokosuge/kindle-highlight-sync-cli-agent-backlog",
+      "path": "devin-plugin"
+    }
+  ]
+}
