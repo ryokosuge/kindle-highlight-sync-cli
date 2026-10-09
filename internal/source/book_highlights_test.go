@@ -86,11 +86,18 @@ func fakeHighlightsFetch(t *testing.T, pages map[string]fakeHighlightsPage, canc
 // highlightsMiddleHTML は content-limit-state の無い途中ページの断片。
 const highlightsMiddleHTML = `<input type="hidden" class="kp-notebook-annotations-next-page-start" value="aaaa9999CCCC%2Baaaa"><div id="row-middle" class="a-row a-spacing-base"><input type="hidden" id="kp-annotation-location" value="5000"><div class="kp-notebook-highlight"><span id="highlight">合成の本文 中</span></div></div>`
 
-// highlightsMiddleCLSHHTML は content-limit-state を持つ途中ページの断片。
-const highlightsMiddleCLSHHTML = `<input type="hidden" class="kp-notebook-content-limit-state" value="aaaa9999DDDD"><input type="hidden" class="kp-notebook-annotations-next-page-start" value="aaaa9999CCCC%2Baaaa"><div id="row-middle" class="a-row a-spacing-base"><input type="hidden" id="kp-annotation-location" value="5000"><div class="kp-notebook-highlight"><span id="highlight">合成の本文 中</span></div></div>`
+// highlightsMiddleCLSHTML は content-limit-state を持つ途中ページの断片。
+const highlightsMiddleCLSHTML = `<input type="hidden" class="kp-notebook-content-limit-state" value="aaaa9999DDDD"><input type="hidden" class="kp-notebook-annotations-next-page-start" value="aaaa9999CCCC%2Baaaa"><div id="row-middle" class="a-row a-spacing-base"><input type="hidden" id="kp-annotation-location" value="5000"><div class="kp-notebook-highlight"><span id="highlight">合成の本文 中</span></div></div>`
 
 func TestListHighlightEntries(t *testing.T) {
 	const asin = "AAAAAAAAA1"
+	threePages := []HighlightEntry{
+		{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAx", Text: "合成の本文 1", Note: "合成の Note 1", Location: "99"},
+		{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTpISUdITElHSFQ6YTAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMw", Text: "合成の本文 2", Location: "999"},
+		{RawID: "row-middle", Text: "合成の本文 中", Location: "5000"},
+		{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTk6SElHSExJR0hUOmFhYWFhYTk5OTk5OQ", Text: "合成の本文 3", Location: "9999"},
+		{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2", Text: "合成の本文 4", Note: "合成の Note 4", Location: "99999"},
+	}
 	tests := []struct {
 		name      string
 		pages     map[string]fakeHighlightsPage
@@ -104,13 +111,7 @@ func TestListHighlightEntries(t *testing.T) {
 				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleHTML},
 				"aaaa9999CCCC%2Baaaa": {fixture: "highlights_next.html"},
 			},
-			want: []HighlightEntry{
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAx", Text: "合成の本文 1", Note: "合成の Note 1", Location: "99"},
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTpISUdITElHSFQ6YTAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMw", Text: "合成の本文 2", Location: "999"},
-				{RawID: "row-middle", Text: "合成の本文 中", Location: "5000"},
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTk6SElHSExJR0hUOmFhYWFhYTk5OTk5OQ", Text: "合成の本文 3", Location: "9999"},
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2", Text: "合成の本文 4", Note: "合成の Note 4", Location: "99999"},
-			},
+			want: threePages,
 			wantCalls: []highlightsCall{
 				{asin: asin},
 				{asin: asin, token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -121,16 +122,10 @@ func TestListHighlightEntries(t *testing.T) {
 			name: "後のページの ContentLimitState で更新する",
 			pages: map[string]fakeHighlightsPage{
 				"":                    {fixture: "highlights_first.html"},
-				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleCLSHHTML},
+				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleCLSHTML},
 				"aaaa9999CCCC%2Baaaa": {fixture: "highlights_next.html"},
 			},
-			want: []HighlightEntry{
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAx", Text: "合成の本文 1", Note: "合成の Note 1", Location: "99"},
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTpISUdITElHSFQ6YTAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMw", Text: "合成の本文 2", Location: "999"},
-				{RawID: "row-middle", Text: "合成の本文 中", Location: "5000"},
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTk6SElHSExJR0hUOmFhYWFhYTk5OTk5OQ", Text: "合成の本文 3", Location: "9999"},
-				{RawID: "QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2", Text: "合成の本文 4", Note: "合成の Note 4", Location: "99999"},
-			},
+			want: threePages,
 			wantCalls: []highlightsCall{
 				{asin: asin},
 				{asin: asin, token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
