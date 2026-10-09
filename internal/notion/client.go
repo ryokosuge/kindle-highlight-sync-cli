@@ -19,6 +19,7 @@ import (
 const (
 	defaultBaseURL = "https://api.notion.com"
 	notionVersion  = "2026-03-11"
+	requestTimeout = 30 * time.Second
 )
 
 // Client は Notion API を呼ぶクライアント。token は Authorization ヘッダにだけ使い、error には出さない。
@@ -66,6 +67,12 @@ func withRetrySleep(f func(context.Context, time.Duration) error) Option {
 	}
 }
 
+func withHTTPTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		c.http.Timeout = d
+	}
+}
+
 func withRetryJitter(f func() time.Duration) Option {
 	return func(c *Client) {
 		c.retry.jitter = f
@@ -78,6 +85,7 @@ func New(token string, opts ...Option) *Client {
 		token:   token,
 		baseURL: defaultBaseURL,
 		http: &http.Client{
+			Timeout: requestTimeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},

@@ -39,6 +39,7 @@ type initNotionServer struct {
 	methods   []string
 	auth      []string
 	responses map[string]initResponse
+	onRequest func(path string)
 }
 
 func newInitNotionServer(t *testing.T, responses map[string]initResponse) *initNotionServer {
@@ -56,6 +57,9 @@ func newInitNotionServer(t *testing.T, responses map[string]initResponse) *initN
 			t.Errorf("unexpected Notion path %q", r.URL.Path)
 			http.NotFound(w, r)
 			return
+		}
+		if stub.onRequest != nil {
+			stub.onRequest(r.URL.Path)
 		}
 		w.WriteHeader(response.status)
 		_, _ = io.WriteString(w, response.body)
@@ -382,6 +386,41 @@ func TestInitConfigSafety(t *testing.T) {
 			assertDataPreserved()
 		})
 	}
+
+	t.Run("確認と保存の間に config.toml が現れると保存せず exit 3", func(t *testing.T) {
+		stub := newInitNotionServer(t, initRoutes(initDataSourceResponse("ds-1", true, false)))
+		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
+		p := setupInit(t, input, "", "", stub)
+		stub.onRequest = func(path string) {
+			if path == "/v1/data_sources/ds-1" {
+				if err := os.MkdirAll(filepath.Dir(p.ConfigFile), 0o700); err != nil {
+					t.Errorf("create config directory during Notion request: %v", err)
+					return
+				}
+				if err := os.WriteFile(p.ConfigFile, []byte(validConfigTOML), 0o600); err != nil {
+					t.Errorf("create config.toml during Notion request: %v", err)
+				}
+			}
+		}
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"init"}, &stdout, &stderr)
+		if code != 3 {
+			t.Errorf("run(init) code = %d, want 3", code)
+		}
+		wantSuffix := "configuration / confirmation required: " + p.ConfigFile + " already exists: run init --force to recreate it\n"
+		if !strings.HasSuffix(stderr.String(), wantSuffix) {
+			t.Errorf("stderr = %q, want suffix %q", stderr.String(), wantSuffix)
+		}
+		if got, err := os.ReadFile(p.ConfigFile); err != nil || !bytes.Equal(got, []byte(validConfigTOML)) {
+			t.Errorf("config.toml = %q, %v; want original bytes", got, err)
+		}
+		if _, err := keyring.Get("kindle-highlight-sync", "notion-token"); !errors.Is(err, keyring.ErrNotFound) {
+			t.Errorf("keyring token error = %v, want not found", err)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout = %q, want empty", stdout.String())
+		}
+	})
 }
 
 func TestInitYes(t *testing.T) {
@@ -608,6 +647,69 @@ func TestInitErrors(t *testing.T) {
 		}
 		if strings.Contains(stdout.String()+stderr.String(), initTokenValue) {
 			t.Errorf("output contains token: stdout=%q stderr=%q", stdout.String(), stderr.String())
+		}
+	})
+
+	t.Run("config の保存に失敗すると Keychain の token を戻す", func(t *testing.T) {
+		tests := []struct {
+			name, previous, wantKeychain string
+		}{
+			{name: "旧 token がある", previous: "old-token-value", wantKeychain: "old-token-value"},
+			{name: "旧 token がない", wantKeychain: initTokenValue},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				stub := newInitNotionServer(t, initRoutes(initDataSourceResponse("ds-1", true, false)))
+				input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
+				p := setupInit(t, input, "", validConfigTOML, stub)
+				if tt.previous != "" {
+					if err := keyring.Set("kindle-highlight-sync", "notion-token", tt.previous); err != nil {
+						t.Fatal(err)
+					}
+				}
+				before, err := os.ReadFile(p.ConfigFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				dir := filepath.Dir(p.ConfigFile)
+				if err := os.Chmod(dir, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Chmod(dir, 0o700); err != nil {
+						t.Error(err)
+					}
+				})
+				probe, err := os.CreateTemp(dir, "probe-*")
+				if err == nil {
+					probePath := probe.Name()
+					if err := probe.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Remove(probePath); err != nil {
+						t.Fatal(err)
+					}
+					t.Skip("権限を無視して書き込めるプロセス（root など）では、書き込めないディレクトリを作れない")
+				}
+
+				var stdout, stderr bytes.Buffer
+				code := run([]string{"init", "--force"}, &stdout, &stderr)
+				if code != 1 {
+					t.Errorf("run(init --force) code = %d, want 1; stderr = %q", code, stderr.String())
+				}
+				if got, err := os.ReadFile(p.ConfigFile); err != nil || !bytes.Equal(got, before) {
+					t.Errorf("config.toml = %q, %v; want original bytes", got, err)
+				}
+				if got, err := keyring.Get("kindle-highlight-sync", "notion-token"); err != nil || got != tt.wantKeychain {
+					t.Errorf("keychain token = %q, %v; want %q", got, err, tt.wantKeychain)
+				}
+				for _, token := range []string{initTokenValue, "old-token-value"} {
+					if strings.Contains(stdout.String()+stderr.String(), token) {
+						t.Errorf("output contains token %q: stdout=%q stderr=%q", token, stdout.String(), stderr.String())
+					}
+				}
+			})
 		}
 	})
 }

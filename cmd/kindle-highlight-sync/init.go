@@ -95,7 +95,19 @@ func runInit(cmd *cobra.Command, a *app, databaseID string, force, yes bool) err
 		return err
 	}
 
+	if err := initExistingConfig(a.paths.ConfigFile, force); err != nil {
+		return exitcode.New(exitcode.ConfigRequired, err)
+	}
+
+	var previousToken string
+	hasPreviousToken := false
 	if saveToken {
+		var err error
+		previousToken, _, err = secrets.NotionToken()
+		if err != nil && !errors.Is(err, secrets.ErrNotFound) {
+			return err
+		}
+		hasPreviousToken = err == nil
 		if err := secrets.SaveNotionToken(token); err != nil {
 			return err
 		}
@@ -109,6 +121,11 @@ func runInit(cmd *cobra.Command, a *app, databaseID string, force, yes bool) err
 		},
 	}
 	if err := config.Save(a.paths.ConfigFile, cfg); err != nil {
+		if hasPreviousToken {
+			if rbErr := secrets.SaveNotionToken(previousToken); rbErr != nil {
+				return errors.Join(err, fmt.Errorf("restore previous Notion token: %w", rbErr))
+			}
+		}
 		return err
 	}
 	printInitSummary(cmd, a.paths.ConfigFile, id, ref.Name, mapping, ds)
