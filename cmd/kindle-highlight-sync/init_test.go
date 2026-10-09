@@ -50,9 +50,9 @@ func newInitNotionServer(t *testing.T, responses map[string]initResponse) *initN
 		stub.paths = append(stub.paths, r.URL.Path)
 		stub.methods = append(stub.methods, r.Method)
 		stub.auth = append(stub.auth, r.Header.Get("Authorization"))
+		response, ok := stub.responses[r.URL.Path]
 		stub.mu.Unlock()
 
-		response, ok := stub.responses[r.URL.Path]
 		if !ok {
 			t.Errorf("unexpected Notion path %q", r.URL.Path)
 			http.NotFound(w, r)
@@ -117,6 +117,21 @@ func initDataSourceResponse(dataSourceID string, includeDate, onlyMemoKindle boo
 	}
 	if includeDate {
 		properties = append(properties, `"Last Annotated At":{"id":"last-annotated-at","name":"Last Annotated At","type":"date"}`)
+	}
+	return initResponse{
+		status: http.StatusOK,
+		body:   fmt.Sprintf(`{"object":"data_source","id":%q,"properties":{%s}}`, dataSourceID, strings.Join(properties, ",")),
+	}
+}
+
+type initProperty struct {
+	id, name, typ string
+}
+
+func initDataSourceWith(dataSourceID string, props ...initProperty) initResponse {
+	properties := make([]string, len(props))
+	for i, prop := range props {
+		properties[i] = fmt.Sprintf(`%q:{"id":%q,"name":%q,"type":%q}`, prop.name, prop.id, prop.name, prop.typ)
 	}
 	return initResponse{
 		status: http.StatusOK,
@@ -260,6 +275,70 @@ func TestInitInteractive(t *testing.T) {
 		}
 		if !strings.Contains(stdout, "author: (not mapped)\nasin: Memo\n") {
 			t.Errorf("stdout = %q, want author unmapped and Memo ASIN", stdout)
+		}
+	})
+
+	t.Run("型の合わない任意 Property は対応させずに知らせる", func(t *testing.T) {
+		responses := initRoutes(initDataSourceWith("ds-1",
+			initProperty{"title", "Name", "title"},
+			initProperty{"kindle-id", "Kindle ID", "rich_text"},
+			initProperty{"author", "Author", "number"},
+			initProperty{"asin", "ASIN", "select"},
+			initProperty{"last-annotated-at", "Last Annotated At", "rich_text"},
+		))
+		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
+		p, stub, code, stdout, stderr := runInitTest(t, []string{"init"}, input, "", responses)
+		if code != 0 {
+			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
+		}
+		wantStderr := "Notion token: Notion Database URL or ID: " +
+			"not mapping property \"Author\" to author: type is number, want rich_text\n" +
+			"not mapping property \"ASIN\" to asin: type is select, want rich_text\n" +
+			"not mapping property \"Last Annotated At\" to last_annotated_at: type is rich_text, want date\n" +
+			"title\n  1) Name\nnumber [1]: kindle_id\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\nnumber [1]: author\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: asin\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: last_annotated_at\n" +
+			"  0) do not map\nnumber [0]: "
+		if stderr != wantStderr {
+			t.Errorf("stderr = %q, want %q", stderr, wantStderr)
+		}
+		wantStdout := "saved " + p.ConfigFile + "\n" +
+			"database_id: " + initDatabaseID + "\n" +
+			"data source: Books\n" +
+			"title: Name\nkindle_id: Kindle ID\nauthor: (not mapped)\nasin: (not mapped)\nlast_annotated_at: (not mapped)\n"
+		if stdout != wantStdout {
+			t.Errorf("stdout = %q, want %q", stdout, wantStdout)
+		}
+		cfg := loadInitConfig(t, p.ConfigFile)
+		if want := (config.Mapping{Title: "title", KindleID: "kindle-id"}); cfg.Notion.Mapping != want {
+			t.Errorf("mapping = %+v, want %+v", cfg.Notion.Mapping, want)
+		}
+		data, err := os.ReadFile(p.ConfigFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(data, []byte("[notion.mapping]")) {
+			t.Errorf("config.toml has no [notion.mapping]: %q", data)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			for _, key := range []string{"author", "asin", "last_annotated_at"} {
+				if strings.HasPrefix(trimmed, key) {
+					t.Errorf("config.toml maps %q: %q", key, line)
+				}
+			}
+		}
+		if got, err := keyring.Get("kindle-highlight-sync", "notion-token"); err != nil || got != initTokenValue {
+			t.Errorf("keyring token = %q, %v; want %q", got, err, initTokenValue)
+		}
+		for _, method := range stub.methods {
+			if method != http.MethodGet {
+				t.Errorf("request method = %q, want GET", method)
+			}
+		}
+		if strings.Contains(stdout+stderr, initTokenValue) {
+			t.Errorf("output contains token: stdout=%q stderr=%q", stdout, stderr)
 		}
 	})
 }
@@ -464,6 +543,60 @@ func TestInitYes(t *testing.T) {
 		}
 	})
 
+	t.Run("型の合わない任意 Property は対応させずに知らせる", func(t *testing.T) {
+		responses := initRoutes(initDataSourceWith("ds-1",
+			initProperty{"title", "Name", "title"},
+			initProperty{"kindle-id", "Kindle ID", "rich_text"},
+			initProperty{"author", "Author", "number"},
+			initProperty{"asin", "ASIN", "select"},
+			initProperty{"last-annotated-at", "Last Annotated At", "rich_text"},
+		))
+		p, stub, code, stdout, stderr := runInitTest(t, []string{"init", "--yes", "--database-id", initDatabaseRawID}, "", initTokenValue, responses)
+		if code != 0 {
+			t.Fatalf("run(init --yes) code = %d, stderr = %q", code, stderr)
+		}
+		wantStderr := "not mapping property \"Author\" to author: type is number, want rich_text\n" +
+			"not mapping property \"ASIN\" to asin: type is select, want rich_text\n" +
+			"not mapping property \"Last Annotated At\" to last_annotated_at: type is rich_text, want date\n"
+		if stderr != wantStderr {
+			t.Errorf("stderr = %q, want %q", stderr, wantStderr)
+		}
+		wantStdout := "saved " + p.ConfigFile + "\n" +
+			"database_id: " + initDatabaseID + "\n" +
+			"data source: Books\n" +
+			"title: Name\nkindle_id: Kindle ID\nauthor: (not mapped)\nasin: (not mapped)\nlast_annotated_at: (not mapped)\n"
+		if stdout != wantStdout {
+			t.Errorf("stdout = %q, want %q", stdout, wantStdout)
+		}
+		cfg := loadInitConfig(t, p.ConfigFile)
+		if want := (config.Mapping{Title: "title", KindleID: "kindle-id"}); cfg.Notion.Mapping != want {
+			t.Errorf("mapping = %+v, want %+v", cfg.Notion.Mapping, want)
+		}
+		data, err := os.ReadFile(p.ConfigFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(data, []byte("[notion.mapping]")) {
+			t.Errorf("config.toml has no [notion.mapping]: %q", data)
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			for _, key := range []string{"author", "asin", "last_annotated_at"} {
+				if strings.HasPrefix(trimmed, key) {
+					t.Errorf("config.toml maps %q: %q", key, line)
+				}
+			}
+		}
+		for _, method := range stub.methods {
+			if method != http.MethodGet {
+				t.Errorf("request method = %q, want GET", method)
+			}
+		}
+		if strings.Contains(stdout+stderr, initTokenValue) {
+			t.Errorf("output contains token: stdout=%q stderr=%q", stdout, stderr)
+		}
+	})
+
 	t.Run("判断できない場合は token や request を残さず終了する", func(t *testing.T) {
 		t.Run("database-id なし", func(t *testing.T) {
 			p, stub, code, _, stderr := runInitTest(t, []string{"init", "--yes"}, "", "", map[string]initResponse{})
@@ -536,6 +669,114 @@ func TestInitErrors(t *testing.T) {
 				}
 				if len(stub.paths) != 0 {
 					t.Errorf("paths = %v, want none", stub.paths)
+				}
+			})
+		}
+	})
+
+	t.Run("必須 Property が無いか型が合わないと保存せず exit 3", func(t *testing.T) {
+		missing := initDataSourceWith("ds-1",
+			initProperty{"title", "Name", "title"},
+			initProperty{"last-annotated-at", "Last Annotated At", "date"},
+		)
+		mismatched := initDataSourceWith("ds-1",
+			initProperty{"title", "Name", "title"},
+			initProperty{"kindle-id", "Kindle ID", "number"},
+			initProperty{"memo", "Memo", "rich_text"},
+			initProperty{"last-annotated-at", "Last Annotated At", "date"},
+		)
+		tests := []struct {
+			name       string
+			args       []string
+			input      string
+			token      string
+			dataSource initResponse
+			want       string
+		}{
+			{
+				name:       "不足 interactive",
+				args:       []string{"init"},
+				input:      initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n",
+				dataSource: missing,
+				want:       "Notion token: Notion Database URL or ID: configuration / confirmation required: missing property for kindle_id: need a property of type rich_text\n",
+			},
+			{
+				name:       "不足 --yes",
+				args:       []string{"init", "--yes", "--database-id", initDatabaseRawID},
+				token:      initTokenValue,
+				dataSource: missing,
+				want:       "configuration / confirmation required: missing property for kindle_id: need a property of type rich_text\n",
+			},
+			{
+				name:       "型違い interactive",
+				args:       []string{"init"},
+				input:      initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n",
+				dataSource: mismatched,
+				want:       "Notion token: Notion Database URL or ID: configuration / confirmation required: property \"Kindle ID\" for kindle_id has type number, want rich_text\n",
+			},
+			{
+				name:       "型違い --yes",
+				args:       []string{"init", "--yes", "--database-id", initDatabaseRawID},
+				token:      initTokenValue,
+				dataSource: mismatched,
+				want:       "configuration / confirmation required: property \"Kindle ID\" for kindle_id has type number, want rich_text\n",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				stub := newInitNotionServer(t, initRoutes(tt.dataSource))
+				p := setupInit(t, tt.input, tt.token, "", stub)
+				var stdout, stderr bytes.Buffer
+				if code := run(tt.args, &stdout, &stderr); code != 3 {
+					t.Errorf("run(%v) code = %d, want 3; stderr = %q", tt.args, code, stderr.String())
+				}
+				if stderr.String() != tt.want {
+					t.Errorf("stderr = %q, want %q", stderr.String(), tt.want)
+				}
+				if stdout.Len() != 0 {
+					t.Errorf("stdout = %q, want empty", stdout.String())
+				}
+				if _, err := os.Stat(p.ConfigFile); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("config exists: %v", err)
+				}
+				if _, err := keyring.Get("kindle-highlight-sync", "notion-token"); !errors.Is(err, keyring.ErrNotFound) {
+					t.Errorf("keyring token error = %v, want not found", err)
+				}
+				for _, method := range stub.methods {
+					if method != http.MethodGet {
+						t.Errorf("request method = %q, want GET", method)
+					}
+				}
+				if strings.Contains(stdout.String()+stderr.String(), initTokenValue) {
+					t.Errorf("output contains token: stdout=%q stderr=%q", stdout.String(), stderr.String())
+				}
+
+				stub.mu.Lock()
+				stub.responses["/v1/data_sources/ds-1"] = initDataSourceResponse("ds-1", true, false)
+				stub.mu.Unlock()
+				stdout.Reset()
+				stderr.Reset()
+				if code := run(tt.args, &stdout, &stderr); code != 0 {
+					t.Fatalf("run(%v) code = %d, want 0; stderr = %q", tt.args, code, stderr.String())
+				}
+				cfg := loadInitConfig(t, p.ConfigFile)
+				want := &config.Config{
+					Amazon: config.Amazon{Region: initRegion},
+					Notion: config.Notion{
+						DatabaseID: initDatabaseID, DataSourceID: "ds-1",
+						Mapping: config.Mapping{Title: "title", KindleID: "kindle-id", Author: "author", ASIN: "asin", LastAnnotatedAt: "last-annotated-at"},
+					},
+				}
+				if *cfg != *want {
+					t.Errorf("config = %+v, want %+v", *cfg, *want)
+				}
+				for _, method := range stub.methods {
+					if method != http.MethodGet {
+						t.Errorf("request method = %q, want GET", method)
+					}
+				}
+				if strings.Contains(stdout.String()+stderr.String(), initTokenValue) {
+					t.Errorf("output contains token: stdout=%q stderr=%q", stdout.String(), stderr.String())
 				}
 			})
 		}
