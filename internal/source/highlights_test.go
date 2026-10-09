@@ -104,6 +104,18 @@ func TestParseHighlightsPageError(t *testing.T) {
 			want:    "source: highlights page: parse HTML: html: open stack of elements exceeds 512 nodes",
 			notWant: []string{text, note, "<span"},
 		},
+		{
+			name:    "続きの token の input が無い",
+			html:    string(readFixture(t, "highlights_no_next_token.html")),
+			want:    "source: highlights page: next page token input is missing",
+			notWant: []string{text, note, "<input"},
+		},
+		{
+			name:    "続きの token の input に value 属性が無い",
+			html:    string(readFixture(t, "highlights_next_token_no_value.html")),
+			want:    "source: highlights page: next page token input has no value attribute",
+			notWant: []string{text, note, "<input"},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

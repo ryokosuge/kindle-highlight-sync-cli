@@ -2,6 +2,7 @@ package source
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -18,6 +19,11 @@ const (
 	highlightsSelectorLocation          = "input#kp-annotation-location"
 	highlightsSelectorNextToken         = "input.kp-notebook-annotations-next-page-start"
 	highlightsSelectorContentLimitState = "input.kp-notebook-content-limit-state"
+)
+
+var (
+	errHighlightsNextTokenMissing = errors.New("source: highlights page: next page token input is missing")
+	errHighlightsNextTokenNoValue = errors.New("source: highlights page: next page token input has no value attribute")
 )
 
 // HighlightEntry は Highlight のページの 1 行。Highlight ID はまだ付いていない。
@@ -48,8 +54,17 @@ func ParseHighlightsPage(html []byte) (HighlightsPage, error) {
 		rowSelector = highlightsSelectorContainerRow
 	}
 
+	next := doc.Find(highlightsSelectorNextToken).First()
+	if next.Length() == 0 {
+		return HighlightsPage{}, errHighlightsNextTokenMissing
+	}
+	token, ok := next.Attr("value")
+	if !ok {
+		return HighlightsPage{}, errHighlightsNextTokenNoValue
+	}
+
 	page := HighlightsPage{
-		NextToken:         doc.Find(highlightsSelectorNextToken).First().AttrOr("value", ""),
+		NextToken:         token,
 		ContentLimitState: doc.Find(highlightsSelectorContentLimitState).First().AttrOr("value", ""),
 	}
 	doc.Find(rowSelector).Each(func(_ int, s *goquery.Selection) {
