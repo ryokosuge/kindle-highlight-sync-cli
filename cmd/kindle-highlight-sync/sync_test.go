@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -151,6 +152,57 @@ func TestSync(t *testing.T) {
 				}
 				if b.listCalled != 1 {
 					t.Errorf("ListBooks() called %d times, want 1", b.listCalled)
+				}
+			})
+		}
+	})
+
+	t.Run("Book 一覧が構造の異常を返すと exit 7 で終わり、見つからなかった構造を 1 行出す", func(t *testing.T) {
+		// internal/source の listBooks が返す実際の形（newFormatError で包まれた SourceFormat の種類）
+		listErr := exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: list books: page 1: %w",
+			fmt.Errorf("source: library page: notebook root container is missing: %w", source.ErrSourceFormat)))
+		const wantErr = "source format error: source: list books: page 1: source: library page: notebook root container is missing: unexpected notebook structure\n"
+		tests := []struct {
+			name     string
+			pageURL  string
+			pageHTML []byte
+		}{
+			{name: "認証済みと判定したあと", pageURL: "https://read.amazon.co.jp/notebook", pageHTML: []byte(`<div id="kp-notebook-library"></div>`)},
+			{name: "認証が判定不能のまま取得に進んでも exit 2 にならない", pageURL: "https://read.amazon.co.jp/notebook", pageHTML: []byte("<p>notebook</p>")},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				p := setupXDG(t, "")
+				b := &fakeBrowser{reached: true, listErr: listErr, pageURL: tt.pageURL, pageHTML: tt.pageHTML}
+				stubBrowser(t, b, nil)
+
+				code, stderr := runSync(t)
+				if code != 7 {
+					t.Errorf("run(sync) code = %d, want 7", code)
+				}
+				if stderr != wantErr {
+					t.Errorf("run(sync) stderr = %q, want %q", stderr, wantErr)
+				}
+				// 見つからなかった構造の 1 行だけを出し、HTML の断片や Book・クエリの値を含めない（仕様書 §74）
+				for _, ng := range []string{"<", "Title", "Author", "library=list&token="} {
+					if strings.Contains(stderr, ng) {
+						t.Errorf("run(sync) stderr = %q, must not contain %q", stderr, ng)
+					}
+				}
+				if !b.closed {
+					t.Error("browser not closed")
+				}
+				if b.listCalled != 1 {
+					t.Errorf("ListBooks() called %d times, want 1", b.listCalled)
+				}
+				// 構造の異常で終わっても排他（run.lock）は解放される
+				lockFile := filepath.Join(p.DataDir, "run.lock")
+				l, err := lock.Acquire(lockFile)
+				if err != nil {
+					t.Fatalf("lock.Acquire(%q) after exit 7 = %v, want released", lockFile, err)
+				}
+				if err := l.Release(); err != nil {
+					t.Fatalf("Release(%q) = %v", lockFile, err)
 				}
 			})
 		}
