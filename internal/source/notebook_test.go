@@ -168,6 +168,46 @@ func TestOpenNotebookChrome(t *testing.T) {
 	})
 }
 
+func TestPageChrome(t *testing.T) {
+	chromePath(t)
+
+	t.Run("サインイン済みなら Notebook の URL と HTML を返す", func(t *testing.T) {
+		f := &fakeAmazon{}
+		f.signedIn.Store(true)
+		b := openFakeAmazon(t, f)
+		if _, err := b.OpenNotebook(context.Background()); err != nil {
+			t.Fatalf("OpenNotebook() error = %v", err)
+		}
+		finalURL, html, err := b.Page(context.Background())
+		if err != nil {
+			t.Fatalf("Page() error = %v", err)
+		}
+		if finalURL != NotebookURL {
+			t.Errorf("Page() finalURL = %q, want %q", finalURL, NotebookURL)
+		}
+		if !strings.Contains(string(html), "<p>notebook</p>") {
+			t.Errorf("Page() html = %q, want it to contain %q", html, "<p>notebook</p>")
+		}
+	})
+
+	t.Run("認証ページに送られたら認証ページの URL と HTML を返す", func(t *testing.T) {
+		b := openFakeAmazon(t, &fakeAmazon{})
+		if _, err := b.OpenNotebook(context.Background()); err != nil {
+			t.Fatalf("OpenNotebook() error = %v", err)
+		}
+		finalURL, html, err := b.Page(context.Background())
+		if err != nil {
+			t.Fatalf("Page() error = %v", err)
+		}
+		if finalURL != signInURL {
+			t.Errorf("Page() finalURL = %q, want %q", finalURL, signInURL)
+		}
+		if !strings.Contains(string(html), "<p>sign in</p>") {
+			t.Errorf("Page() html = %q, want it to contain %q", html, "<p>sign in</p>")
+		}
+	})
+}
+
 func TestWaitNotebookChrome(t *testing.T) {
 	chromePath(t)
 
