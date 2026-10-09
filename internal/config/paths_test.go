@@ -65,6 +65,41 @@ func TestResolvePaths(t *testing.T) {
 	}
 }
 
+func TestBrowserProfileDir(t *testing.T) {
+	home := t.TempDir()
+	xdgData := t.TempDir()
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "XDG_DATA_HOME が絶対パス",
+			env:  map[string]string{"XDG_DATA_HOME": xdgData},
+			want: filepath.Join(xdgData, "kindle-highlight-sync", "browser-profile"),
+		},
+		{
+			name: "XDG_DATA_HOME が空",
+			env:  nil,
+			want: filepath.Join(home, ".local", "share", "kindle-highlight-sync", "browser-profile"),
+		},
+		{
+			name: "XDG_DATA_HOME が相対パス",
+			env:  map[string]string{"XDG_DATA_HOME": "relative/data"},
+			want: filepath.Join(home, ".local", "share", "kindle-highlight-sync", "browser-profile"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolvePaths(envOf(tt.env), home).BrowserProfileDir()
+			if got != tt.want {
+				t.Errorf("BrowserProfileDir() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefaultPaths(t *testing.T) {
 	home := t.TempDir()
 	xdgConfig := t.TempDir()
