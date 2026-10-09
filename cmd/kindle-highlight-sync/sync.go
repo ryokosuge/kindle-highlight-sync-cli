@@ -17,13 +17,13 @@ const lockFileName = "run.lock"
 // syncNotebookWait は headless の Chrome で Notebook を開き終えるのを待つ上限。login と違い本人の操作を待たない。
 const syncNotebookWait = time.Minute
 
-// syncBody は排他の内側で行う sync の処理。login の profile を headless で開き、Notebook に到達したかを 1 回だけ確かめる。
+// syncBody は排他の内側で行う sync の処理。login の profile を headless（--headed なら画面付き）で開き、Notebook に到達したかを 1 回だけ確かめる。
 // テストは差し替えて先発を止めておく。後続の Epic が Highlight の取得と Notion への同期をここに足す。
-var syncBody = func(ctx context.Context, a *app) (err error) {
+var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// Open に渡す ctx にタイムアウトを付けると Chrome ごと止まるので、Notebook を開く action だけに付ける
 	b, err := openBrowser(ctx, source.Options{
 		ProfileDir: a.paths.BrowserProfileDir(),
-		Headless:   true,
+		Headless:   !headed,
 	})
 	if err != nil {
 		return err // 起動の失敗は exitcode.Browser（5）で包まれている
@@ -49,14 +49,17 @@ var syncBody = func(ctx context.Context, a *app) (err error) {
 }
 
 func newSyncCmd(a *app) *cobra.Command {
-	return &cobra.Command{
+	var headed bool
+	cmd := &cobra.Command{
 		Use:   "sync",
 		Short: "Kindle の Highlight と Note を Notion に同期する",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return withLock(a, func() error { return syncBody(cmd.Context(), a) })
+			return withLock(a, func() error { return syncBody(cmd.Context(), a, headed) })
 		},
 	}
+	cmd.Flags().BoolVar(&headed, "headed", false, "画面付きの Chrome で同期する（既定は headless）")
+	return cmd
 }
 
 // withLock は run.lock の排他を取って body を呼び、終わったら排他を解放する。
