@@ -20,18 +20,24 @@ func newSyncCmd(a *app) *cobra.Command {
 		Use:   "sync",
 		Short: "Kindle の Highlight と Note を Notion に同期する",
 		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) (err error) {
-			l, err := lock.Acquire(filepath.Join(a.paths.DataDir, lockFileName))
-			if err != nil {
-				return err // 取り合いなら exitcode.AlreadyRunning（9）で包まれている
-			}
-			defer func() {
-				// 本体の失敗を優先し、本体が成功したときだけ解放の失敗を返す
-				if rerr := l.Release(); err == nil {
-					err = rerr
-				}
-			}()
-			return syncBody(cmd.Context(), a)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return withLock(a, func() error { return syncBody(cmd.Context(), a) })
 		},
 	}
+}
+
+// withLock は run.lock の排他を取って body を呼び、終わったら排他を解放する。
+// sync と login が同じ排他の内側で動くための共通の入口。
+func withLock(a *app, body func() error) (err error) {
+	l, err := lock.Acquire(filepath.Join(a.paths.DataDir, lockFileName))
+	if err != nil {
+		return err // 取り合いなら exitcode.AlreadyRunning（9）で包まれている
+	}
+	defer func() {
+		// 本体の失敗を優先し、本体が成功したときだけ解放の失敗を返す
+		if rerr := l.Release(); err == nil {
+			err = rerr
+		}
+	}()
+	return body()
 }
