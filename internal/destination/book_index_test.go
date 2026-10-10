@@ -1,0 +1,302 @@
+package destination
+
+import (
+	"reflect"
+	"testing"
+
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+)
+
+const (
+	testASIN      = "B000000001"
+	testOtherASIN = "B000000002"
+)
+
+// kindleBook は Kindle 側の Book を NewBookID の Book ID 付きで作る。
+func kindleBook(asin, title, author string) domain.Book {
+	return domain.Book{ID: domain.NewBookID(asin, title, author), ASIN: asin, Title: title, Author: author}
+}
+
+func page(id, kindleID, asin, title, author string) IndexedBook {
+	return IndexedBook{Remote: RemoteBook{ID: id}, KindleID: kindleID, ASIN: asin, Title: title, Author: author}
+}
+
+func TestBookIndexMatch(t *testing.T) {
+	noASINBook := kindleBook("", "吾輩は猫である", "夏目漱石")
+	tests := []struct {
+		name             string
+		pages            []IndexedBook
+		hasAuthorMapping bool
+		book             domain.Book
+		wantStatus       BookMatchStatus
+		wantID           string
+	}{
+		// Kindle ID Property の段
+		{
+			name: "Kindle ID Property が ASIN の Book ID と一致すれば ASIN や Title が一致する別のページより優先して exact",
+			pages: []IndexedBook{
+				page("page-asin", "", testASIN, "Go", "Alan"),
+				page("page-title", "", "", "Go", "Alan"),
+				page("page-kindle", testASIN, "", "Other", "Other"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "exact",
+			wantID:           "page-kindle",
+		},
+		{
+			name: "ASIN の無い Book は b1- の Book ID で Kindle ID Property と一致して exact",
+			pages: []IndexedBook{
+				page("page-title", "", "", noASINBook.Title, noASINBook.Author),
+				page("page-kindle", noASINBook.ID, "", "Other", ""),
+			},
+			hasAuthorMapping: true,
+			book:             noASINBook,
+			wantStatus:       "exact",
+			wantID:           "page-kindle",
+		},
+		{
+			name: "Kindle ID Property が一致するページが 2 件なら ambiguous で ASIN の段に進まない",
+			pages: []IndexedBook{
+				page("page-kindle-1", testASIN, "", "", ""),
+				page("page-kindle-2", testASIN, "", "", ""),
+				page("page-asin", "", testASIN, "Go", "Alan"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "ambiguous",
+		},
+		// ASIN の段
+		{
+			name: "Kindle ID Property が空で ASIN が一致すれば Title+Author が一致する別のページより優先して adoptable",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", "Alan"),
+				page("page-asin", "", testASIN, "Other", "Other"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "adoptable",
+			wantID:           "page-asin",
+		},
+		{
+			name: "ASIN が一致するページが 2 件なら ambiguous で Title+Author の段に進まない",
+			pages: []IndexedBook{
+				page("page-asin-1", "", testASIN, "", ""),
+				page("page-asin-2", "", testASIN, "", ""),
+				page("page-title", "", "", "Go", "Alan"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "ambiguous",
+		},
+		{
+			name: "ASIN は正規化せずに比べる",
+			pages: []IndexedBook{
+				page("page-asin", "", "b000000001", "", ""),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		// Title+Author の段
+		{
+			name: "ASIN で決まらなければ正規化した Title+Author が一致するページが adoptable",
+			pages: []IndexedBook{
+				page("page-asin", "", testOtherASIN, "Other", "Other"),
+				page("page-title-author", "", "", "ｇｏ　プログラミング", " ALAN\tDONOVAN "),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go プログラミング", "Alan Donovan"),
+			wantStatus:       "adoptable",
+			wantID:           "page-title-author",
+		},
+		{
+			name: "Title+Author が一致すれば author が空で Title だけ一致するページより優先する",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", ""),
+				page("page-title-author", "", "", "Go", "Alan"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "adoptable",
+			wantID:           "page-title-author",
+		},
+		{
+			name: "Title+Author が一致するページが 2 件なら ambiguous",
+			pages: []IndexedBook{
+				page("page-title-author-1", "", "", "Go", "Alan"),
+				page("page-title-author-2", "", "", "go", "alan"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "ambiguous",
+		},
+		{
+			name: "Title+Author の key は境界がずれた組と衝突しない",
+			pages: []IndexedBook{
+				page("page-shifted", "", "", "GoA", "lan"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		// Title だけの段
+		{
+			name: "author の対応が無ければ Title だけが一致する 1 件が adoptable",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", "Bob"),
+			},
+			hasAuthorMapping: false,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "adoptable",
+			wantID:           "page-title",
+		},
+		{
+			name: "author の対応が無ければ author の違う同じ Title のページ 2 件は ambiguous",
+			pages: []IndexedBook{
+				page("page-title-1", "", "", "Go", "Alan"),
+				page("page-title-2", "", "", "Go", "Bob"),
+			},
+			hasAuthorMapping: false,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "ambiguous",
+		},
+		{
+			name: "Notion の author が空なら Title だけが一致する 1 件が adoptable",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", " "),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "adoptable",
+			wantID:           "page-title",
+		},
+		{
+			name: "Kindle の author が空なら Title だけが一致する 1 件が adoptable",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", "Bob"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", ""),
+			wantStatus:       "adoptable",
+			wantID:           "page-title",
+		},
+		{
+			name: "author が両方あって違うページは候補に数えず、author が空の 1 件が adoptable",
+			pages: []IndexedBook{
+				page("page-other-author", "", "", "Go", "Bob"),
+				page("page-no-author", "", "", "Go", ""),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "adoptable",
+			wantID:           "page-no-author",
+		},
+		{
+			name: "author が両方あって違うページだけなら none",
+			pages: []IndexedBook{
+				page("page-other-author", "", "", "Go", "Bob"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name: "Notion の author が空で Title だけが一致するページが 2 件なら ambiguous",
+			pages: []IndexedBook{
+				page("page-no-author-1", "", "", "Go", ""),
+				page("page-no-author-2", "", "", "Go", ""),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "ambiguous",
+		},
+		{
+			name: "Kindle の author が空なら author が空のページと author があるページの 2 件は ambiguous",
+			pages: []IndexedBook{
+				page("page-no-author", "", "", "Go", ""),
+				page("page-author", "", "", "Go", "Bob"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", ""),
+			wantStatus:       "ambiguous",
+		},
+		// Kindle ID Property が入っているページの除外
+		{
+			name: "Kindle ID Property が入っているページは ASIN が一致しても候補にならない",
+			pages: []IndexedBook{
+				page("page-other-book", testOtherASIN, testASIN, "", ""),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name: "Kindle ID Property が入っているページは Title+Author が一致しても候補にならない",
+			pages: []IndexedBook{
+				page("page-other-book", testOtherASIN, "", "Go", "Alan"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name: "Kindle ID Property が入っているページは Title だけが一致しても候補にならない",
+			pages: []IndexedBook{
+				page("page-other-book", testOtherASIN, "", "Go", ""),
+			},
+			hasAuthorMapping: false,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		// 空の値
+		{
+			name: "空の ASIN どうしは一致しない",
+			pages: []IndexedBook{
+				page("page-empty", "", "", "Other", "Other"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name: "正規化して空になる Title どうしは一致しない",
+			pages: []IndexedBook{
+				page("page-blank-title", "", "", "\u3000", ""),
+			},
+			hasAuthorMapping: false,
+			book:             kindleBook("", " ", ""),
+			wantStatus:       "none",
+		},
+		{
+			name: "正規化して空になる Title どうしは author が一致しても一致しない",
+			pages: []IndexedBook{
+				page("page-blank-title", "", "", "", "Alan"),
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", " ", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name:             "ページが無ければ none",
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "none",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := NewBookIndex(tt.pages, tt.hasAuthorMapping).Match(tt.book)
+			if got.Status != tt.wantStatus {
+				t.Errorf("Match().Status = %q, want %q", got.Status, tt.wantStatus)
+			}
+			var wantBook *RemoteBook
+			if tt.wantID != "" {
+				wantBook = &RemoteBook{ID: tt.wantID}
+			}
+			if !reflect.DeepEqual(got.Book, wantBook) {
+				t.Errorf("Match().Book = %+v, want %+v", got.Book, wantBook)
+			}
+		})
+	}
+}
