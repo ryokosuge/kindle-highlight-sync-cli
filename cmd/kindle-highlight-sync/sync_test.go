@@ -41,6 +41,41 @@ func runSync(t *testing.T) (code int, stderr string) {
 	return code, stderrBuf.String()
 }
 
+// captureProcessOutput は f の間 os.Stdout / os.Stderr をファイルに差し替え、そこに書かれた内容を返す。
+// run に渡した writer を通らない出力（fmt.Print や log）も、標準出力・標準エラーに出ていないことを確かめるために使う。
+func captureProcessOutput(t *testing.T, f func()) (stdout, stderr string) {
+	t.Helper()
+	dir := t.TempDir()
+	outFile, err := os.Create(filepath.Join(dir, "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	errFile, err := os.Create(filepath.Join(dir, "stderr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	origOut, origErr := os.Stdout, os.Stderr
+	os.Stdout, os.Stderr = outFile, errFile
+	func() {
+		defer func() { os.Stdout, os.Stderr = origOut, origErr }()
+		f()
+	}()
+	for _, file := range []*os.File{outFile, errFile} {
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, err := os.ReadFile(outFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	errOut, err := os.ReadFile(errFile.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out), string(errOut)
+}
+
 func assertSyncSucceeded(t *testing.T, code int, stderr string, lockFile string) {
 	t.Helper()
 	if code != 0 {
@@ -108,8 +143,13 @@ func TestSync(t *testing.T) {
 		}
 		stubBrowser(t, b, nil)
 
-		// runSync は stdout が空であることも確かめる。stderr も空なので Highlight の本文・Note・件数はどこにも出ない
-		code, stderr := runSync(t)
+		// run の stdout / stderr とプロセスの標準出力・標準エラーがすべて空なので、Highlight の本文・Note・件数はどこにも出ない
+		var code int
+		var stderr string
+		osStdout, osStderr := captureProcessOutput(t, func() { code, stderr = runSync(t) })
+		if osStdout != "" || osStderr != "" {
+			t.Errorf("process stdout = %q, stderr = %q, want both empty", osStdout, osStderr)
+		}
 		if code != 0 {
 			t.Errorf("run(sync) code = %d, want 0", code)
 		}
@@ -166,7 +206,12 @@ func TestSync(t *testing.T) {
 				}
 				stubBrowser(t, b, nil)
 
-				code, stderr := runSync(t)
+				var code int
+				var stderr string
+				osStdout, osStderr := captureProcessOutput(t, func() { code, stderr = runSync(t) })
+				if osStdout != "" || osStderr != "" {
+					t.Errorf("process stdout = %q, stderr = %q, want both empty", osStdout, osStderr)
+				}
 				if code != tt.wantCode {
 					t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
 				}
