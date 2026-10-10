@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"strconv"
 	"text/tabwriter"
 
 	syncengine "github.com/ryokosuge/kindle-highlight-sync-cli/internal/sync"
@@ -14,13 +15,17 @@ import (
 func writePlan(w io.Writer, p syncengine.Plan) error {
 	var buf bytes.Buffer
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "Kindle Book\tMatch Status\tMatched Notion Page\tAction")
+	_, _ = fmt.Fprintln(tw, "Kindle Book\tMatch Status\tMatched Notion Page\tAction\tHighlights to append")
 	for _, b := range p.Books {
 		pageID := "-"
 		if b.Match.Book != nil {
 			pageID = b.Match.Book.ID
 		}
-		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", b.Book.Title, b.Match.Status, pageID, b.Action)
+		appendCount := "-"
+		if b.Action != syncengine.ActionSkip {
+			appendCount = strconv.Itoa(b.HighlightsToAppend)
+		}
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", b.Book.Title, b.Match.Status, pageID, b.Action, appendCount)
 	}
 	_, _ = fmt.Fprintln(tw)
 	_, _ = fmt.Fprintf(tw, "Exact matches\t%d\n", p.Summary.ExactMatches)
