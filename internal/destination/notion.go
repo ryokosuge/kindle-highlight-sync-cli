@@ -1,0 +1,57 @@
+package destination
+
+import (
+	"context"
+
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/config"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/notion"
+)
+
+type pageQuerier interface {
+	QueryDataSource(ctx context.Context, dataSourceID string) ([]notion.Page, error)
+}
+
+// NotionDestination は Notion の Data Source を同期先とする Destination。同時に複数の goroutine から呼ばない。
+type NotionDestination struct {
+	client pageQuerier
+	notion config.Notion
+	index  *BookIndex // 最初の FindBook で作る
+}
+
+var _ Destination = (*NotionDestination)(nil)
+
+// NewNotionDestination は cfg の Data Source と Property の対応を使う NotionDestination を返す。
+func NewNotionDestination(client *notion.Client, cfg config.Notion) *NotionDestination {
+	return &NotionDestination{client: client, notion: cfg}
+}
+
+// FindBook は最初の呼び出しで Data Source の全ページを取り、index を作ってから照合する（§10）。
+// 全件取得に失敗したら index を作らずに error（exitcode.Notion）を返し、次の呼び出しで取り直す。
+func (d *NotionDestination) FindBook(ctx context.Context, book domain.Book) (BookMatch, error) {
+	if d.index == nil {
+		pages, err := d.client.QueryDataSource(ctx, d.notion.DataSourceID)
+		if err != nil {
+			return BookMatch{}, err
+		}
+		d.index = NewBookIndex(indexedBooks(pages, d.notion.Mapping), d.notion.Mapping.Author != "")
+	}
+	return d.index.Match(book), nil
+}
+
+// indexedBooks は各ページの Property を mapping の Property ID で読む。
+// mapping されていない Property（ID が空）と、ページに無い Property は空として扱う。
+func indexedBooks(pages []notion.Page, mapping config.Mapping) []IndexedBook {
+	books := make([]IndexedBook, 0, len(pages))
+	for _, p := range pages {
+		text := func(propertyID string) string { return p.Properties[propertyID].Text }
+		books = append(books, IndexedBook{
+			Remote:   RemoteBook{ID: p.ID},
+			KindleID: text(mapping.KindleID),
+			ASIN:     text(mapping.ASIN),
+			Title:    text(mapping.Title),
+			Author:   text(mapping.Author),
+		})
+	}
+	return books
+}
