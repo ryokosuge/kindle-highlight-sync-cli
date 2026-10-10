@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"io"
 	"io/fs"
 
 	"github.com/spf13/cobra"
@@ -19,6 +20,8 @@ const ignoreConfigErrorAnnotation = "kindle-highlight-sync/ignore-config-error"
 type app struct {
 	paths  config.Paths
 	config *config.Config // config.toml が無ければ nil
+	dryRun bool           // sync --dry-run。Notion と State を書かずに予定だけを出す（§63）
+	out    io.Writer      // 予定の表の出力先（sync の RunE で cmd.OutOrStdout() を入れる）
 }
 
 func newRootCmd() *cobra.Command {

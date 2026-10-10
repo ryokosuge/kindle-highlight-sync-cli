@@ -22,6 +22,7 @@ import (
 const (
 	wantSyncShort         = "Kindle の Highlight と Note を Notion に同期する"
 	wantSyncHeadedUsage   = "画面付きの Chrome で同期する（既定は headless）"
+	wantSyncDryRunUsage   = "Notion と State を変えずに、Book の照合の結果と追記する Highlight の数だけを出す"
 	wantAlreadyRunningErr = "already running: another kindle-highlight-sync process is running\n"
 )
 
@@ -689,20 +690,22 @@ func TestSync(t *testing.T) {
 		}
 	})
 
-	t.Run("sync --help に --headed とその説明が出る", func(t *testing.T) {
+	t.Run("sync --help に各フラグとその説明が出る", func(t *testing.T) {
 		setupXDG(t, "")
 		var stdout, stderr bytes.Buffer
 		if code := run([]string{"sync", "--help"}, &stdout, &stderr); code != 0 {
 			t.Errorf("run(sync --help) code = %d, stderr = %q, want 0", code, stderr.String())
 		}
-		var found bool
-		for line := range strings.Lines(stdout.String()) {
-			if strings.Contains(line, "--headed") && strings.Contains(line, wantSyncHeadedUsage) {
-				found = true
+		for flag, usage := range map[string]string{"--headed": wantSyncHeadedUsage, "--dry-run": wantSyncDryRunUsage} {
+			var found bool
+			for line := range strings.Lines(stdout.String()) {
+				if strings.Contains(line, flag) && strings.Contains(line, usage) {
+					found = true
+				}
 			}
-		}
-		if !found {
-			t.Errorf("sync --help output does not list --headed: %q", stdout.String())
+			if !found {
+				t.Errorf("sync --help output does not list %s: %q", flag, stdout.String())
+			}
 		}
 	})
 }

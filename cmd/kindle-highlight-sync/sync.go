@@ -10,9 +10,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/lock"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
+	syncengine "github.com/ryokosuge/kindle-highlight-sync-cli/internal/sync"
 )
 
 const lockFileName = "run.lock"
@@ -66,6 +68,7 @@ func (e *booksFailedError) Error() string {
 }
 
 // syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得する。
+// a.dryRun なら Highlight の取得は照合（BuildPlan）の中で 1 回だけ行い、予定の表を a.out に出して Notion と State は書かない（§63）。
 // テストは差し替えて先発を止めておく。後続の Epic が Notion への同期をここに足す。
 var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// Open に渡す ctx にタイムアウトを付けると Chrome ごと止まるので、Notebook を開く action だけに付ける
@@ -101,6 +104,9 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if err != nil {
 		return err
 	}
+	if a.dryRun {
+		return writeDryRunPlan(ctx, a, books, b)
+	}
 	// 取得した Highlight はまだ使わない。1 冊だけの構造の異常と ASIN の無い Book は Book ID と種類を集めて残りの Book を続け、
 	// 取り終えて 1 冊でもあれば SourceFormat（exit 7）で終わる（§72。exit 8 への切り替えと last_synced_at の扱いは Epic #7）。
 	// 全 Book に共通の枠の異常（source.ErrHighlightsFrame。§73）とそれ以外の失敗（取得の失敗・ctx の取消）は、その時点で種類を変えずに返す
@@ -126,6 +132,37 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	return nil
 }
 
+// writeDryRunPlan は Book を Notion と照合して予定を組み、表と summary を a.out に書く（§63 / §64）。
+// 同期先の組み立て（exit 3）と照合（exit 4）の失敗は種類を変えずに返し、予定は出さない。
+// writeDryRunPlan は dry-run の予定を a.out に出す。ASIN の無い Book は Highlight のページを開けないので、通常の sync と同じく
+// bookFailureNoASIN に集めて予定の組み立てから除き、残りの Book の予定を出したあとに SourceFormat（exit 7）で終わる（§72）。
+func writeDryRunPlan(ctx context.Context, a *app, books []domain.Book, src browser) error {
+	dst, err := newDestination(a)
+	if err != nil {
+		return err
+	}
+	var failed []bookFailure
+	planned := make([]domain.Book, 0, len(books))
+	for _, book := range books {
+		if book.ASIN == "" {
+			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
+			continue
+		}
+		planned = append(planned, book)
+	}
+	plan, err := syncengine.BuildPlan(ctx, planned, src, dst)
+	if err != nil {
+		return err
+	}
+	if err := writePlan(a.out, plan); err != nil {
+		return err
+	}
+	if len(failed) > 0 {
+		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
+	}
+	return nil
+}
+
 func newSyncCmd(a *app) *cobra.Command {
 	var headed bool
 	cmd := &cobra.Command{
@@ -133,10 +170,12 @@ func newSyncCmd(a *app) *cobra.Command {
 		Short: "Kindle の Highlight と Note を Notion に同期する",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			a.out = cmd.OutOrStdout()
 			return withLock(a, func() error { return syncBody(cmd.Context(), a, headed) })
 		},
 	}
 	cmd.Flags().BoolVar(&headed, "headed", false, "画面付きの Chrome で同期する（既定は headless）")
+	cmd.Flags().BoolVar(&a.dryRun, "dry-run", false, "Notion と State を変えずに、Book の照合の結果と追記する Highlight の数だけを出す")
 	return cmd
 }
 
