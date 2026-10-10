@@ -304,6 +304,21 @@ func TestSyncDryRun(t *testing.T) {
 				wantRequests: []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath},
 			},
 			{
+				// 採用方式と異なる prefix の Sync Marker は方式の混在として exit 6（§16.3）。Highlight は取らず、Notion にも書かない
+				name:       "採用方式と異なる prefix の Sync Marker があれば exit 6",
+				configTOML: validConfigTOML,
+				token:      testDryRunToken,
+				replies: map[string]string{
+					testDryRunQueryPath:  dryRunQueryBody(),
+					testDryRunBlocksPath: blockListBody(dryRunBlockJSON("block-1", "Distinctive Highlight Text\nkhs:h1-SECRETREST")),
+				},
+				wantCode: 6,
+				wantStderr: func(config.Paths) string {
+					return "local state / ID scheme error: notion page page-exact has a Sync Marker with Highlight ID prefix \"h1-\", but the adopted prefix is \"a-\"\n"
+				},
+				wantRequests: []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath},
+			},
+			{
 				name:       "config.toml が無ければ exit 3",
 				configTOML: "",
 				token:      testDryRunToken,

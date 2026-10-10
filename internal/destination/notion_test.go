@@ -373,13 +373,20 @@ func TestNotionDestinationListHighlightIDs(t *testing.T) {
 }
 
 func TestNotionDestinationListHighlightIDsFailure(t *testing.T) {
+	// 採用方式と異なる prefix の Sync Marker は方式の混在（§16.3）として exit 6 で止める。メッセージには prefix と Notion Page ID だけが入る。
+	schemeMismatch := func(prefix string) string {
+		return fmt.Sprintf("notion page %s has a Sync Marker with Highlight ID prefix %q, but the adopted prefix is \"a-\"", testPageID, prefix)
+	}
 	tests := []struct {
-		name    string
-		replies []notionReply
+		name     string
+		replies  []notionReply
+		wantCode int
+		wantErr  string // 空なら Notion の Client の error（メッセージは確かめない）
 	}{
 		{
-			name:    "最初の要求が失敗する",
-			replies: []notionReply{{status: http.StatusBadRequest, body: notionErrorBody}},
+			name:     "最初の要求が失敗する",
+			replies:  []notionReply{{status: http.StatusBadRequest, body: notionErrorBody}},
+			wantCode: 4,
 		},
 		{
 			name: "途中の応答の要求が失敗する",
@@ -387,6 +394,39 @@ func TestNotionDestinationListHighlightIDsFailure(t *testing.T) {
 				queryReply("cursor-1", blockJSON("q-1", "quote", "khs:a-1")),
 				{status: http.StatusBadRequest, body: notionErrorBody},
 			},
+			wantCode: 4,
+		},
+		{
+			name: "もう一方の方式の prefix の Sync Marker があれば exit 6",
+			replies: []notionReply{queryReply("",
+				blockJSON("q-1", "quote", "Distinctive Highlight Body · khs:a-1"),
+				blockJSON("q-2", "quote", "Distinctive Highlight Body · khs:h1-SECRETREST"),
+			)},
+			wantCode: 6,
+			wantErr:  schemeMismatch("h1-"),
+		},
+		{
+			name:     "未知の prefix の Sync Marker があれば exit 6",
+			replies:  []notionReply{queryReply("", blockJSON("q-1", "quote", "Distinctive Highlight Body · khs:zz-SECRETREST"))},
+			wantCode: 6,
+			wantErr:  schemeMismatch("zz-"),
+		},
+		{
+			name:     "- の無い Sync Marker があれば prefix が無いことを示して exit 6",
+			replies:  []notionReply{queryReply("", blockJSON("q-1", "quote", "Distinctive Highlight Body · khs:SECRETREST"))},
+			wantCode: 6,
+			wantErr:  schemeMismatch(""),
+		},
+		{
+			// 子 block は全件取ってから調べるので、後ろの応答の Sync Marker でも止まる
+			name: "2 回目の応答に異なる prefix があっても exit 6",
+			replies: []notionReply{
+				queryReply("cursor-1", blockJSON("q-1", "quote", "khs:a-1")),
+				queryReply("cursor-2", blockJSON("q-2", "quote", "khs:h1-SECRETREST")),
+				queryReply("", blockJSON("q-3", "quote", "khs:a-3")),
+			},
+			wantCode: 6,
+			wantErr:  schemeMismatch("h1-"),
 		},
 	}
 	for _, tt := range tests {
@@ -395,11 +435,21 @@ func TestNotionDestinationListHighlightIDsFailure(t *testing.T) {
 			d := NewNotionDestination(client, config.Notion{DataSourceID: testDataSourceID, Mapping: fullMapping})
 
 			got, err := d.ListHighlightIDs(context.Background(), RemoteBook{ID: testPageID})
-			if got := exitcode.Code(err); got != 4 {
-				t.Fatalf("exitcode.Code(err) = %d, want 4 (err = %v)", got, err)
+			if got := exitcode.Code(err); got != tt.wantCode {
+				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", got, tt.wantCode, err)
 			}
 			if got != nil {
 				t.Errorf("ListHighlightIDs() = %+v, want nil", got)
+			}
+			if tt.wantErr != "" {
+				if err.Error() != tt.wantErr {
+					t.Errorf("ListHighlightIDs() error = %q, want %q", err.Error(), tt.wantErr)
+				}
+				for _, secret := range []string{"SECRETREST", "Distinctive Highlight Body"} {
+					if strings.Contains(err.Error(), secret) {
+						t.Errorf("ListHighlightIDs() error = %q, want no %q", err.Error(), secret)
+					}
+				}
 			}
 			assertBlockRequests(t, requests(), len(tt.replies))
 		})
