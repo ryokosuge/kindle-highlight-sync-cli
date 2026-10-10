@@ -14,19 +14,13 @@ import (
 // errHighlightsASINEmpty は ASIN が空の Book を渡されたときの失敗。ASIN が空の Book は Highlight のページを取れない。
 var errHighlightsASINEmpty = errors.New("source: list highlights: book has no ASIN")
 
-// errHighlightsTokenRepeated は、続きの token がすでに使ったものと同じだったときの失敗。token の値は文言に出さない。
-var errHighlightsTokenRepeated = errors.New("next page token was already used")
-
-// errHighlightIDDuplicated は行 id の重複でだけ起きる。黙ってまとめると Note が消えるのでエラーにする。
-var errHighlightIDDuplicated = errors.New("highlight ID was already returned")
-
 // fetchHighlightsPage は Book の Highlight のページの HTML を返す。token が空なら 1 ページ目。テストで差し替える。
 type fetchHighlightsPage func(ctx context.Context, asin, token, contentLimitState string) ([]byte, error)
 
 // ListHighlights は Book の全 Highlight を a- の Highlight ID 付きで返す。
 // 途中で失敗したら、それまでの Highlight は返さない（仕様書 §56）。
-// ページ取得の失敗は種類を変えずに返し、ID の作成失敗・重複は errors.Is で辿れる形で返す。
-// SourceFormat への分類は #54 で行う。
+// ページ取得の失敗は種類を変えずに返す。続きの token の異常・行 id から ID が作れない・ID の重複・空の行は
+// 構造の異常として SourceFormat（exit 7）の種類で返す（仕様書 §16.1 / §19 / §55）。行を飛ばして残りを返すこともしない。
 func (b *Browser) ListHighlights(ctx context.Context, book domain.Book) ([]domain.Highlight, error) {
 	return listHighlights(ctx, book, b.fetchHighlightsPage)
 }
@@ -41,10 +35,12 @@ func listHighlights(ctx context.Context, book domain.Book, fetch fetchHighlights
 	for i, e := range entries {
 		id, err := domain.NewHighlightID(e.RawID, book.ASIN)
 		if err != nil {
-			return nil, fmt.Errorf("source: list highlights %s: row %d: %w", book.ASIN, i+1, err)
+			// 行 id が読めない行に別方式の ID を作らない（§16.1）。原因（domain.ErrMissingAnnotationID）も errors.Is で辿れるよう残す。
+			return nil, fmt.Errorf("source: list highlights %s: row %d: %w", book.ASIN, i+1, wrapFormatError(err))
 		}
 		if seen[id] {
-			return nil, fmt.Errorf("source: list highlights %s: row %d: %w", book.ASIN, i+1, errHighlightIDDuplicated)
+			// 行 id の重複でだけ起きる。黙ってまとめると Note が消えるのでエラーにする。
+			return nil, fmt.Errorf("source: list highlights %s: row %d: %w", book.ASIN, i+1, newFormatError("highlight ID was already returned"))
 		}
 		seen[id] = true
 		hs = append(hs, domain.Highlight{
@@ -90,7 +86,7 @@ func listHighlightEntries(ctx context.Context, asin string, fetch fetchHighlight
 			return entries, nil
 		}
 		if seen[p.NextToken] {
-			return nil, fmt.Errorf("source: list highlights %s: page %d: %w", asin, n, errHighlightsTokenRepeated)
+			return nil, fmt.Errorf("source: list highlights %s: page %d: %w", asin, n, newFormatError("next page token was already used"))
 		}
 		seen[p.NextToken] = true
 		token = p.NextToken
