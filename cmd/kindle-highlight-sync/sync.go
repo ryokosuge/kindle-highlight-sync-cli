@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -29,6 +31,38 @@ var checkAuth = func(ctx context.Context, b browser) error {
 		return exitcode.New(exitcode.AmazonAuth, fmt.Errorf("sync: %s; run `kindle-highlight-sync login` to sign in again", reason))
 	}
 	return nil
+}
+
+// bookFailureKind は Book 単位の失敗の種類。Book ID と一緒に標準エラーに出すので、Title や Highlight の本文・Note は持たない（仕様書 §74）。
+type bookFailureKind string
+
+const (
+	bookFailureSourceFormat bookFailureKind = "unexpected notebook structure" // その Book の Highlight のページだけが構造の異常（§55 / §72）
+	bookFailureNoASIN       bookFailureKind = "book has no ASIN"              // ASIN が無く Highlight のページを開けない Book（Book ID は §13 の b1-）
+)
+
+// bookFailure は Highlight を取れなかった 1 冊の Book。
+type bookFailure struct {
+	BookID string
+	Kind   bookFailureKind
+}
+
+// booksFailedError は Book 単位の失敗を集めたもの。残りの Book を取り終えてから返す。
+type booksFailedError struct {
+	failed []bookFailure
+	books  int // 取得を試みた Book の総数
+}
+
+func (e *booksFailedError) Error() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "sync: highlights of %d of %d books could not be listed:", len(e.failed), e.books)
+	for i, f := range e.failed {
+		if i > 0 {
+			b.WriteString(";")
+		}
+		fmt.Fprintf(&b, " %s (%s)", f.BookID, f.Kind)
+	}
+	return b.String()
 }
 
 // syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得する。
@@ -67,11 +101,27 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if err != nil {
 		return err
 	}
-	// 取得した Highlight はまだ使わない。1 冊でも失敗したらその時点で種類を変えずに返す
+	// 取得した Highlight はまだ使わない。1 冊だけの構造の異常と ASIN の無い Book は Book ID と種類を集めて残りの Book を続け、
+	// 取り終えて 1 冊でもあれば SourceFormat（exit 7）で終わる（§72。exit 8 への切り替えと last_synced_at の扱いは Epic #7）。
+	// 全 Book に共通の枠の異常（source.ErrHighlightsFrame。§73）とそれ以外の失敗（取得の失敗・ctx の取消）は、その時点で種類を変えずに返す
+	var failed []bookFailure
 	for _, book := range books {
-		if _, err := b.ListHighlights(ctx, book); err != nil {
+		if book.ASIN == "" {
+			// Highlight のページは ASIN でしか開けない。黙って飛ばすと取りこぼしに気づけないので失敗に数える
+			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
+			continue
+		}
+		_, err := b.ListHighlights(ctx, book)
+		switch {
+		case err == nil:
+		case errors.Is(err, source.ErrSourceFormat) && !errors.Is(err, source.ErrHighlightsFrame):
+			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureSourceFormat})
+		default:
 			return err
 		}
+	}
+	if len(failed) > 0 {
+		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
 	}
 	return nil
 }

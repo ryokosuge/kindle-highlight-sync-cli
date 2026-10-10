@@ -96,11 +96,12 @@ func TestParseHighlightsPageError(t *testing.T) {
 		note = "合成の Note エラー"
 	)
 	tests := []struct {
-		name     string
-		html     string
-		want     string
-		wantCode int // 構造の異常は 7（SourceFormat）、HTML として読めないのは 1（種類なし）
-		notWant  []string
+		name      string
+		html      string
+		want      string
+		wantCode  int  // 構造の異常は 7（SourceFormat）、HTML として読めないのは 1（種類なし）
+		wantFrame bool // 全 Book に共通の枠（続きの印）の異常にだけ ErrHighlightsFrame が付く
+		notWant   []string
 	}{
 		{
 			name:     "HTML として解析できない",
@@ -110,18 +111,20 @@ func TestParseHighlightsPageError(t *testing.T) {
 			notWant:  []string{text, note, "<span"},
 		},
 		{
-			name:     "続きの token の input が無い",
-			html:     string(readFixture(t, "highlights_no_next_token.html")),
-			want:     "source: highlights page: next page token input is missing: unexpected notebook structure",
-			wantCode: 7,
-			notWant:  []string{text, note, "<input"},
+			name:      "続きの token の input が無い",
+			html:      string(readFixture(t, "highlights_no_next_token.html")),
+			want:      "source: highlights page: highlights frame is unreadable: next page token input is missing: unexpected notebook structure",
+			wantCode:  7,
+			wantFrame: true,
+			notWant:   []string{text, note, "<input"},
 		},
 		{
-			name:     "続きの token の input に value 属性が無い",
-			html:     string(readFixture(t, "highlights_next_token_no_value.html")),
-			want:     "source: highlights page: next page token input has no value attribute: unexpected notebook structure",
-			wantCode: 7,
-			notWant:  []string{text, note, "<input"},
+			name:      "続きの token の input に value 属性が無い",
+			html:      string(readFixture(t, "highlights_next_token_no_value.html")),
+			want:      "source: highlights page: highlights frame is unreadable: next page token input has no value attribute: unexpected notebook structure",
+			wantCode:  7,
+			wantFrame: true,
+			notWant:   []string{text, note, "<input"},
 		},
 		{
 			name:     "本文も Note も空で本文非表示の印も無い行",
@@ -149,6 +152,9 @@ func TestParseHighlightsPageError(t *testing.T) {
 			}
 			if got, want := errors.Is(err, ErrSourceFormat), tt.wantCode == 7; got != want {
 				t.Errorf("errors.Is(err, ErrSourceFormat) = %v, want %v", got, want)
+			}
+			if got := errors.Is(err, ErrHighlightsFrame); got != tt.wantFrame {
+				t.Errorf("errors.Is(err, ErrHighlightsFrame) = %v, want %v", got, tt.wantFrame)
 			}
 			for _, s := range tt.notWant {
 				if strings.Contains(msg, s) {

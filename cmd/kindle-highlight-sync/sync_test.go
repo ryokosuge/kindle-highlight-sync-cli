@@ -130,9 +130,9 @@ func TestSync(t *testing.T) {
 	t.Run("Notebook に到達し認証を確かめたあと Book 一覧を最後まで取得し、Book ごとに全 Highlight を取得して exit 0 で終わり、Book と Highlight を出力しない", func(t *testing.T) {
 		setupXDG(t, "")
 		books := []domain.Book{
-			{ID: "book-id-1", Title: "Distinctive Book One"},
-			{ID: "book-id-2", Title: "Distinctive Book Two"},
-			{ID: "book-id-3", Title: "Distinctive Book Three"},
+			{ID: "book-id-1", ASIN: "B000000001", Title: "Distinctive Book One"},
+			{ID: "book-id-2", ASIN: "B000000002", Title: "Distinctive Book Two"},
+			{ID: "book-id-3", ASIN: "B000000003", Title: "Distinctive Book Three"},
 		}
 		b := &fakeBrowser{
 			reached: true,
@@ -174,29 +174,73 @@ func TestSync(t *testing.T) {
 		}
 	})
 
-	t.Run("ある Book の Highlight の取得に失敗したら exit 0 で終わらず、その失敗をそのまま返して残りの Book は取得しない", func(t *testing.T) {
-		books := []domain.Book{
-			{ID: "book-id-1", Title: "Distinctive Book One"},
-			{ID: "book-id-2", Title: "Distinctive Book Two"},
-			{ID: "book-id-3", Title: "Distinctive Book Three"},
-		}
+	t.Run("Book ごとの Highlight の取得の失敗", func(t *testing.T) {
+		book1 := domain.Book{ID: "book-id-1", ASIN: "B000000001", Title: "Distinctive Book One"}
+		book2 := domain.Book{ID: "book-id-2", ASIN: "B000000002", Title: "Distinctive Book Two"}
+		book3 := domain.Book{ID: "book-id-3", ASIN: "B000000003", Title: "Distinctive Book Three"}
+		// ASIN が無い Book。Book ID は §13 の b1- の代替値で非空
+		bookNoASIN := domain.Book{ID: "b1-0123456789abcdef0123456789abcdef", Title: "Distinctive Book Without ASIN", Author: "Distinctive Author"}
+		// 1 冊だけの構造の異常（行の id が読めない等）。source は newFormatError で SourceFormat にして Book の ASIN とページを前置する
+		bookErr := fmt.Errorf("source: list highlights B000000002: page 1: row 1: %w",
+			exitcode.New(exitcode.SourceFormat, fmt.Errorf("highlight id is missing: %w", source.ErrSourceFormat)))
+		// 全 Book に共通の枠の異常。source は ErrHighlightsFrame を併記する
+		frameErr := fmt.Errorf("source: list highlights B000000002: page 1: source: highlights page: %w: %w", source.ErrHighlightsFrame,
+			exitcode.New(exitcode.SourceFormat, fmt.Errorf("next page token input is missing: %w", source.ErrSourceFormat)))
+
 		tests := []struct {
-			name       string
-			err        error
-			wantCode   int
-			wantStderr string
+			name         string
+			books        []domain.Book
+			highlightErr map[string]error
+			wantCode     int
+			wantStderr   string
+			wantHLBooks  []domain.Book // ListHighlights に渡った Book の順
 		}{
 			{
-				name:       "種類を持たない失敗",
-				err:        errors.New("source: list highlights B000000002: page 2: boom"),
-				wantCode:   1,
-				wantStderr: "general error: source: list highlights B000000002: page 2: boom\n",
+				name:         "1 冊だけが構造の異常なら残りの Book を取り終えてから exit 7 で終わり、その Book を Book ID と種類で区別する",
+				books:        []domain.Book{book1, book2, book3},
+				highlightErr: map[string]error{"book-id-2": bookErr},
+				wantCode:     7,
+				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: book-id-2 (unexpected notebook structure)\n",
+				wantHLBooks:  []domain.Book{book1, book2, book3},
 			},
 			{
-				name:       "SourceFormat の失敗",
-				err:        exitcode.New(exitcode.SourceFormat, errors.New("source: list highlights B000000002: page 1: ...")),
-				wantCode:   7,
-				wantStderr: "source format error: source: list highlights B000000002: page 1: ...\n",
+				name:        "ASIN が無い Book には ListHighlights を呼ばず、残りの Book を取り終えてから exit 7 で終わり、その Book を Book ID と「ASIN が無い」で区別する",
+				books:       []domain.Book{book1, bookNoASIN, book3},
+				wantCode:    7,
+				wantStderr:  "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantHLBooks: []domain.Book{book1, book3},
+			},
+			{
+				name:         "複数の Book が失敗したら Book 一覧の順にすべて区別する",
+				books:        []domain.Book{book1, bookNoASIN, book2, book3},
+				highlightErr: map[string]error{"book-id-3": bookErr},
+				wantCode:     7,
+				wantStderr:   "source format error: sync: highlights of 2 of 4 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN); book-id-3 (unexpected notebook structure)\n",
+				wantHLBooks:  []domain.Book{book1, book2, book3},
+			},
+			{
+				name:         "全 Book に共通の枠の異常なら Book ごとに続けずにすぐ exit 7 で止まる",
+				books:        []domain.Book{book1, book2, book3},
+				highlightErr: map[string]error{"book-id-2": frameErr},
+				wantCode:     7,
+				wantStderr:   "source format error: source: list highlights B000000002: page 1: source: highlights page: highlights frame is unreadable: next page token input is missing: unexpected notebook structure\n",
+				wantHLBooks:  []domain.Book{book1, book2},
+			},
+			{
+				name:         "種類を持たない失敗はその時点でそのまま返す",
+				books:        []domain.Book{book1, book2, book3},
+				highlightErr: map[string]error{"book-id-2": errors.New("source: list highlights B000000002: page 2: boom")},
+				wantCode:     1,
+				wantStderr:   "general error: source: list highlights B000000002: page 2: boom\n",
+				wantHLBooks:  []domain.Book{book1, book2},
+			},
+			{
+				name:         "ctx の取消は失敗を集めている途中でもその時点で返す",
+				books:        []domain.Book{book1, bookNoASIN, book2, book3},
+				highlightErr: map[string]error{"book-id-2": fmt.Errorf("source: list highlights B000000002: page 1: %w", context.Canceled)},
+				wantCode:     1,
+				wantStderr:   "general error: source: list highlights B000000002: page 1: context canceled\n",
+				wantHLBooks:  []domain.Book{book1, book2},
 			},
 		}
 		for _, tt := range tests {
@@ -204,11 +248,12 @@ func TestSync(t *testing.T) {
 				setupXDG(t, "")
 				b := &fakeBrowser{
 					reached: true,
-					books:   books,
+					books:   tt.books,
 					highlights: map[string][]domain.Highlight{
 						"book-id-1": {{ID: "a-HIGHLIGHT-1", BookID: "book-id-1", Text: "Distinctive Highlight Text", Note: "Distinctive Note"}},
+						"book-id-3": {{ID: "a-HIGHLIGHT-3", BookID: "book-id-3", Text: "Distinctive Highlight Three"}},
 					},
-					highlightErr: map[string]error{"book-id-2": tt.err},
+					highlightErr: tt.highlightErr,
 				}
 				stubBrowser(t, b, nil)
 
@@ -224,8 +269,12 @@ func TestSync(t *testing.T) {
 				if stderr != tt.wantStderr {
 					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
 				}
-				if want := books[:2]; !slices.Equal(b.hlBooks, want) {
-					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
+				// 失敗した Book の Title・Highlight の本文・Note はどこにも出ない（Title 等はすべて Distinctive で始まる）
+				if strings.Contains(stderr, "Distinctive") {
+					t.Errorf("run(sync) stderr = %q, want no Title / Text / Note", stderr)
+				}
+				if !slices.Equal(b.hlBooks, tt.wantHLBooks) {
+					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, tt.wantHLBooks)
 				}
 				if !b.closed {
 					t.Error("browser not closed")
@@ -334,7 +383,7 @@ func TestSync(t *testing.T) {
 
 	t.Run("Notebook を開く action には 1 分の期限が付き、Open と Book 一覧・Highlight の取得に渡す ctx には付かない", func(t *testing.T) {
 		setupXDG(t, "")
-		b := &fakeBrowser{reached: true, books: []domain.Book{{ID: "book-id-1"}, {ID: "book-id-2"}}}
+		b := &fakeBrowser{reached: true, books: []domain.Book{{ID: "book-id-1", ASIN: "B000000001"}, {ID: "book-id-2", ASIN: "B000000002"}}}
 		// stubBrowser は渡った ctx を見ないので、fake を返す関数の中で期限の無いことを確かめる
 		orig := openBrowser
 		openBrowser = func(ctx context.Context, _ source.Options) (browser, error) {
@@ -540,7 +589,7 @@ func TestSync(t *testing.T) {
 				stubBrowser(t, &fakeBrowser{
 					reached:      tt.reached,
 					listErr:      tt.listErr,
-					books:        []domain.Book{{ID: "book-id-1"}},
+					books:        []domain.Book{{ID: "book-id-1", ASIN: "B000000001"}},
 					highlightErr: map[string]error{"book-id-1": tt.hlErr},
 					closeErr:     closeErr,
 				}, nil)
