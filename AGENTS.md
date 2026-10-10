@@ -57,7 +57,7 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
 テスト:
 
 - 対象と同じディレクトリに `<file>_test.go` を置き、同一 package の内部テストにする
-- 標準 `testing` のみ（testify 等は使わない）。テーブル駆動 `[]struct{name, ...}` + `t.Run`、ケース名は日本語、メッセージは `"got = %v, want %v"`、ヘルパーは `t.Helper()`
+- 標準 `testing` のみ（testify 等は使わない）。テーブル駆動 `[]struct{name, ...}` + `t.Run`、ケース名は日本語、メッセージは `"<調べた式> = %v, want %v"` の形（例: `line() = %q, want %q`、`stderr = %q, want %q`）、ヘルパーは `t.Helper()`
 - 実ホームを触らない。`t.TempDir()` と `t.Setenv`（`XDG_CONFIG_HOME` / `XDG_DATA_HOME`）で隔離する（`root_test.go` の `setupXDG`）
 - CLI は `run(args, &stdout, &stderr)` を直接呼び、exit code と stderr を検証する。`openBrowser` / `syncBody` はテストで差し替えて `t.Cleanup` で戻す
 - 外部 I/O はテストダブルで固定する: Notion は `httptest.NewServer` + `notion.WithBaseURL`、Keychain は `keyring.MockInit()`、Chrome は偽 CDP プロセス
