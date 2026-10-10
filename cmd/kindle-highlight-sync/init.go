@@ -18,7 +18,7 @@ import (
 
 const initRegion = "japan"
 
-// newNotionClient は init が使う Notion クライアントを作る。テストは httptest のサーバーに向けて差し替える。
+// newNotionClient は init と sync が使う Notion クライアントを作る。テストは httptest のサーバーに向けて差し替える。
 var newNotionClient = func(token string) *notion.Client { return notion.New(token) }
 
 // newInitPrompter は init の対話入力を作る。テストは入力を差し替える。
