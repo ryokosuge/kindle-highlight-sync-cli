@@ -2,7 +2,6 @@ package source
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"strings"
 
@@ -19,11 +18,6 @@ const (
 	highlightsSelectorLocation          = "input#kp-annotation-location"
 	highlightsSelectorNextToken         = "input.kp-notebook-annotations-next-page-start"
 	highlightsSelectorContentLimitState = "input.kp-notebook-content-limit-state"
-)
-
-var (
-	errHighlightsNextTokenMissing = errors.New("source: highlights page: next page token input is missing")
-	errHighlightsNextTokenNoValue = errors.New("source: highlights page: next page token input has no value attribute")
 )
 
 // HighlightEntry は Highlight のページの 1 行。Highlight ID はまだ付いていない。
@@ -43,6 +37,7 @@ type HighlightsPage struct {
 }
 
 // ParseHighlightsPage は Notebook の Highlight 1 ページ分の HTML を解析する。
+// 続きの印が無い、または本文も Note も空で本文非表示の印も無い行があれば SourceFormat の種類のエラーを返す（仕様書 §19 / §55）。
 func ParseHighlightsPage(html []byte) (HighlightsPage, error) {
 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(html))
 	if err != nil {
@@ -56,31 +51,47 @@ func ParseHighlightsPage(html []byte) (HighlightsPage, error) {
 
 	next := doc.Find(highlightsSelectorNextToken).First()
 	if next.Length() == 0 {
-		return HighlightsPage{}, errHighlightsNextTokenMissing
+		return HighlightsPage{}, fmt.Errorf("source: highlights page: %w", newFormatError("next page token input is missing"))
 	}
 	token, ok := next.Attr("value")
 	if !ok {
-		return HighlightsPage{}, errHighlightsNextTokenNoValue
+		return HighlightsPage{}, fmt.Errorf("source: highlights page: %w", newFormatError("next page token input has no value attribute"))
 	}
 
 	page := HighlightsPage{
 		NextToken:         token,
 		ContentLimitState: doc.Find(highlightsSelectorContentLimitState).First().AttrOr("value", ""),
 	}
-	doc.Find(rowSelector).Each(func(_ int, s *goquery.Selection) {
-		page.Entries = append(page.Entries, parseHighlightEntry(s))
+	var parseErr error
+	doc.Find(rowSelector).EachWithBreak(func(i int, s *goquery.Selection) bool {
+		entry, err := parseHighlightEntry(s)
+		if err != nil {
+			parseErr = fmt.Errorf("source: highlights page: row %d: %w", i+1, err)
+			return false
+		}
+		page.Entries = append(page.Entries, entry)
+		return true
 	})
+	if parseErr != nil {
+		return HighlightsPage{}, parseErr
+	}
 	return page, nil
 }
 
-func parseHighlightEntry(s *goquery.Selection) HighlightEntry {
+// parseHighlightEntry は 1 行を読む。Note だけの行は本文の div を持たず、本文非表示の行は本文の代わりに印を持つので（§18.7 / §19）、
+// 本文の要素が無いことだけでは異常にせず、本文も Note も空で印も無いときだけ構造の異常にする（§19 / §18.9 (6)）。
+func parseHighlightEntry(s *goquery.Selection) (HighlightEntry, error) {
 	entry := HighlightEntry{
 		RawID:    s.AttrOr("id", ""),
 		Note:     strings.TrimSpace(s.Find(highlightsSelectorNote).First().Text()),
 		Location: strings.TrimSpace(s.Find(highlightsSelectorLocation).First().AttrOr("value", "")),
 	}
-	if s.Find(highlightsSelectorEmptyText).Length() == 0 {
+	emptyText := s.Find(highlightsSelectorEmptyText).Length() > 0
+	if !emptyText {
 		entry.Text = strings.TrimSpace(s.Find(highlightsSelectorText).First().Text())
 	}
-	return entry
+	if entry.Text == "" && entry.Note == "" && !emptyText {
+		return HighlightEntry{}, newFormatError("highlight row has neither text nor note")
+	}
+	return entry, nil
 }

@@ -11,7 +11,8 @@ import (
 // 方式は 1 リリースにつき 1 種類だけなので（§16）、設定や引数で切り替えない。
 const HighlightIDPrefix = "a-"
 
-// ErrMissingAnnotationID は §16.1 / §55 の採用方式に必要な identifier が取れないときのエラー。#54 で SourceFormat に分類する。
+// ErrMissingAnnotationID は §16.1 / §55 の採用方式に必要な identifier が取れないときのエラー。
+// SourceFormat（exit 7）への分類は Notebook を読む internal/source で行い、この package では種類を付けない。
 var ErrMissingAnnotationID = errors.New("domain: annotation ID is not available")
 
 // NewHighlightID は Notebook の行 id から §16.1 の Highlight ID を作る。

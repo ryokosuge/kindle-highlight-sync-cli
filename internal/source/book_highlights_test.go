@@ -230,8 +230,18 @@ func TestListHighlightsIDError(t *testing.T) {
 		name    string
 		book    domain.Book
 		pages   map[string]fakeHighlightsPage
+		want    string
 		notWant []string
 	}{
+		{
+			name: "行 id が空",
+			book: domain.Book{ID: asin, ASIN: asin},
+			pages: map[string]fakeHighlightsPage{
+				"": {html: `<input type="hidden" class="kp-notebook-annotations-next-page-start" value=""><div class="a-row a-spacing-base"><input type="hidden" id="kp-annotation-location" value="99"><div class="kp-notebook-highlight"><span id="highlight">合成の本文 id なし</span></div></div>`},
+			},
+			want:    "source: list highlights AAAAAAAAA1: row 1: domain: annotation ID is not available: row id is empty: highlight ID cannot be made from row id: unexpected notebook structure",
+			notWant: []string{"合成の本文 id なし", "<div"},
+		},
 		{
 			name: "途中のページの行 id が base64 でない",
 			book: domain.Book{ID: asin, ASIN: asin},
@@ -240,20 +250,27 @@ func TestListHighlightsIDError(t *testing.T) {
 				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleHTML},
 				"aaaa9999CCCC%2Baaaa": {fixture: "highlights_next.html"},
 			},
+			want: "source: list highlights AAAAAAAAA1: row 3: domain: annotation ID is not available: row id is not base64: highlight ID cannot be made from row id: unexpected notebook structure",
 			notWant: []string{
 				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAx",
 				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTpISUdITElHSFQ6YTAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMw",
 				"row-middle",
 				"A9AAAA99A99AA",
+				"合成の本文",
+				"合成の Note",
 			},
 		},
 		{
 			name: "ASIN が違う",
-			book: domain.Book{ID: "AAAAAAAAA2", ASIN: "AAAAAAAAA2"},
+			book: domain.Book{ID: "AAAAAAAAA2", ASIN: "AAAAAAAAA2", Title: "合成の書名 B"},
 			pages: map[string]fakeHighlightsPage{
 				"": {fixture: "highlights_next.html"},
 			},
+			want: "source: list highlights AAAAAAAAA2: row 1: domain: annotation ID is not available: row id belongs to another book: highlight ID cannot be made from row id: unexpected notebook structure",
 			notWant: []string{
+				"合成の書名 B",
+				"合成の本文",
+				"合成の Note",
 				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTk6SElHSExJR0hUOmFhYWFhYTk5OTk5OQ",
 				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2",
 				"A9AAAA99A99AA",
@@ -270,8 +287,17 @@ func TestListHighlightsIDError(t *testing.T) {
 			if err == nil {
 				t.Fatal("listHighlights() error = nil, want error")
 			}
+			if err.Error() != tt.want {
+				t.Errorf("listHighlights() error = %q, want %q", err.Error(), tt.want)
+			}
 			if !errors.Is(err, domain.ErrMissingAnnotationID) {
 				t.Errorf("errors.Is(err, domain.ErrMissingAnnotationID) = %v, want %v", errors.Is(err, domain.ErrMissingAnnotationID), true)
+			}
+			if !errors.Is(err, ErrSourceFormat) {
+				t.Errorf("errors.Is(err, ErrSourceFormat) = %v, want %v", errors.Is(err, ErrSourceFormat), true)
+			}
+			if got := exitcode.Code(err); got != 7 {
+				t.Errorf("exitcode.Code(err) = %d, want %d", got, 7)
 			}
 			for _, value := range tt.notWant {
 				if got := strings.Contains(err.Error(), value); got {
@@ -330,8 +356,14 @@ func TestListHighlightsDuplicateID(t *testing.T) {
 	if err == nil {
 		t.Fatal("listHighlights() error = nil, want error")
 	}
-	if !errors.Is(err, errHighlightIDDuplicated) {
-		t.Errorf("errors.Is(err, errHighlightIDDuplicated) = %v, want %v", errors.Is(err, errHighlightIDDuplicated), true)
+	if want := "source: list highlights AAAAAAAAA1: row 3: highlight ID was already returned: unexpected notebook structure"; err.Error() != want {
+		t.Errorf("listHighlights() error = %q, want %q", err.Error(), want)
+	}
+	if !errors.Is(err, ErrSourceFormat) {
+		t.Errorf("errors.Is(err, ErrSourceFormat) = %v, want %v", errors.Is(err, ErrSourceFormat), true)
+	}
+	if got := exitcode.Code(err); got != 7 {
+		t.Errorf("exitcode.Code(err) = %d, want %d", got, 7)
 	}
 }
 
@@ -344,6 +376,7 @@ func TestListHighlightEntriesError(t *testing.T) {
 		pages     map[string]fakeHighlightsPage
 		want      string
 		wantIs    error
+		wantCode  int // 構造の異常は 7（SourceFormat）、取得そのものの失敗・ctx・ASIN 空は 1（種類なし）
 		wantCalls []highlightsCall
 	}{
 		{
@@ -353,8 +386,9 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"":                    {fixture: "highlights_first.html"},
 				"aaaa9999BBBB%2Baaaa": {err: errFakeHighlightsFetch},
 			},
-			want:   "source: list highlights AAAAAAAAA1: page 2: fake fetch failed",
-			wantIs: errFakeHighlightsFetch,
+			want:     "source: list highlights AAAAAAAAA1: page 2: fake fetch failed",
+			wantIs:   errFakeHighlightsFetch,
+			wantCode: 1,
 			wantCalls: []highlightsCall{
 				{asin: "AAAAAAAAA1"},
 				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -367,8 +401,39 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"":                    {fixture: "highlights_first.html"},
 				"aaaa9999BBBB%2Baaaa": {html: "<p>broken</p>"},
 			},
-			want:   "source: list highlights AAAAAAAAA1: page 2: source: highlights page: next page token input is missing",
-			wantIs: errHighlightsNextTokenMissing,
+			want:     "source: list highlights AAAAAAAAA1: page 2: source: highlights page: next page token input is missing: unexpected notebook structure",
+			wantIs:   ErrSourceFormat,
+			wantCode: 7,
+			wantCalls: []highlightsCall{
+				{asin: "AAAAAAAAA1"},
+				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
+			},
+		},
+		{
+			name: "2 ページ目の続きの token の input に value 属性が無い",
+			asin: "AAAAAAAAA1",
+			pages: map[string]fakeHighlightsPage{
+				"":                    {fixture: "highlights_first.html"},
+				"aaaa9999BBBB%2Baaaa": {fixture: "highlights_next_token_no_value.html"},
+			},
+			want:     "source: list highlights AAAAAAAAA1: page 2: source: highlights page: next page token input has no value attribute: unexpected notebook structure",
+			wantIs:   ErrSourceFormat,
+			wantCode: 7,
+			wantCalls: []highlightsCall{
+				{asin: "AAAAAAAAA1"},
+				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
+			},
+		},
+		{
+			name: "2 ページ目に本文も Note も空で本文非表示の印も無い行がある",
+			asin: "AAAAAAAAA1",
+			pages: map[string]fakeHighlightsPage{
+				"":                    {fixture: "highlights_first.html"},
+				"aaaa9999BBBB%2Baaaa": {fixture: "highlights_empty_row.html"},
+			},
+			want:     "source: list highlights AAAAAAAAA1: page 2: source: highlights page: row 2: highlight row has neither text nor note: unexpected notebook structure",
+			wantIs:   ErrSourceFormat,
+			wantCode: 7,
 			wantCalls: []highlightsCall{
 				{asin: "AAAAAAAAA1"},
 				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -381,8 +446,9 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"":                    {fixture: "highlights_first.html"},
 				"aaaa9999BBBB%2Baaaa": {html: `<input type="hidden" class="kp-notebook-annotations-next-page-start" value="aaaa9999BBBB%2Baaaa">`},
 			},
-			want:   "source: list highlights AAAAAAAAA1: page 2: next page token was already used",
-			wantIs: errHighlightsTokenRepeated,
+			want:     "source: list highlights AAAAAAAAA1: page 2: next page token was already used: unexpected notebook structure",
+			wantIs:   ErrSourceFormat,
+			wantCode: 7,
 			wantCalls: []highlightsCall{
 				{asin: "AAAAAAAAA1"},
 				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -396,8 +462,9 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleHTML},
 				"aaaa9999CCCC%2Baaaa": {html: `<input type="hidden" class="kp-notebook-annotations-next-page-start" value="aaaa9999BBBB%2Baaaa">`},
 			},
-			want:   "source: list highlights AAAAAAAAA1: page 3: next page token was already used",
-			wantIs: errHighlightsTokenRepeated,
+			want:     "source: list highlights AAAAAAAAA1: page 3: next page token was already used: unexpected notebook structure",
+			wantIs:   ErrSourceFormat,
+			wantCode: 7,
 			wantCalls: []highlightsCall{
 				{asin: "AAAAAAAAA1"},
 				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -411,8 +478,9 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"":                    {fixture: "highlights_first.html"},
 				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleHTML, cancel: true},
 			},
-			want:   "source: list highlights AAAAAAAAA1: page 3: context canceled",
-			wantIs: context.Canceled,
+			want:     "source: list highlights AAAAAAAAA1: page 3: context canceled",
+			wantIs:   context.Canceled,
+			wantCode: 1,
 			wantCalls: []highlightsCall{
 				{asin: "AAAAAAAAA1"},
 				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -424,6 +492,7 @@ func TestListHighlightEntriesError(t *testing.T) {
 			pages:     map[string]fakeHighlightsPage{},
 			want:      "source: list highlights: book has no ASIN",
 			wantIs:    errHighlightsASINEmpty,
+			wantCode:  1,
 			wantCalls: []highlightsCall{},
 		},
 	}
@@ -445,7 +514,13 @@ func TestListHighlightEntriesError(t *testing.T) {
 			if !errors.Is(err, tt.wantIs) {
 				t.Errorf("errors.Is(err, %v) = false, err = %v", tt.wantIs, err)
 			}
-			for _, leak := range []string{"aaaa9999", "合成の本文", "合成の Note", "合成の書名"} {
+			if got := exitcode.Code(err); got != tt.wantCode {
+				t.Errorf("exitcode.Code(err) = %d, want %d", got, tt.wantCode)
+			}
+			if got, want := errors.Is(err, ErrSourceFormat), tt.wantCode == 7; got != want {
+				t.Errorf("errors.Is(err, ErrSourceFormat) = %v, want %v", got, want)
+			}
+			for _, leak := range []string{"aaaa9999", "合成の本文", "合成の Note", "合成の書名", "<input", "<div"} {
 				if strings.Contains(err.Error(), leak) {
 					t.Errorf("listHighlightEntries() error = %q, want no %q", err.Error(), leak)
 				}
