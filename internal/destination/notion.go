@@ -2,9 +2,11 @@ package destination
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/config"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/notion"
 )
 
@@ -46,6 +48,8 @@ func (d *NotionDestination) FindBook(ctx context.Context, book domain.Book) (Boo
 // Highlight ID で引ける map にして返す。Notion へは読み取りの要求しか送らない。
 // 同じ Highlight ID の Quote Block が複数あればページ順で最初の block を採る。
 // 子 block の取得に失敗したら途中までの map を返さず error（exitcode.Notion）をそのまま返す。
+// Sync Marker の Highlight ID の prefix が採用方式（domain.HighlightIDPrefix）と違えば、方式の混在（§16.3）として
+// 最初に見つけた block で止め、map を返さず exitcode.LocalState の error を返す。メッセージには prefix と Notion Page ID だけを入れる。
 func (d *NotionDestination) ListHighlightIDs(ctx context.Context, remote RemoteBook) (map[string]RemoteHighlight, error) {
 	blocks, err := d.client.ListBlockChildren(ctx, remote.ID)
 	if err != nil {
@@ -59,6 +63,11 @@ func (d *NotionDestination) ListHighlightIDs(ctx context.Context, remote RemoteB
 		id, ok := SyncMarkerID(b.Text)
 		if !ok {
 			continue
+		}
+		if !domain.IsAdoptedHighlightID(id) {
+			return nil, exitcode.New(exitcode.LocalState, fmt.Errorf(
+				"notion page %s has a Sync Marker with Highlight ID prefix %q, but the adopted prefix is %q",
+				remote.ID, domain.HighlightIDPrefixOf(id), domain.HighlightIDPrefix))
 		}
 		if _, dup := highlights[id]; dup {
 			continue
