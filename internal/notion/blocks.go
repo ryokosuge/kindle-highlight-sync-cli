@@ -103,7 +103,7 @@ func (c *Client) readBlockChildrenResponse(path string, response *blockChildrenR
 }
 
 // readBlock は応答の block を検証し、ID / Type / Text を取り出す。
-// <type> のキーが無い、または rich_text を持たない種類は Text を空にする（block の種類は多岐にわたるので拒否しない）。
+// <type> のキーが無い、または値が object でない応答は壊れた応答として拒否する。<type> が rich_text を持たない種類（divider など）は Text を空にする。
 func readBlock(raw json.RawMessage, at string) (Block, error) {
 	var result struct {
 		Object *string `json:"object"`
@@ -139,7 +139,7 @@ func readBlock(raw json.RawMessage, at string) (Block, error) {
 	}
 	typeRaw, ok := fields[*result.Type]
 	if !ok {
-		return block, nil
+		return Block{}, fmt.Errorf("%s.%s is required", at, *result.Type)
 	}
 	var typeObject *struct {
 		RichText json.RawMessage `json:"rich_text"`

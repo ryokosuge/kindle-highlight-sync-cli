@@ -142,7 +142,7 @@ func TestListBlockChildren(t *testing.T) {
 			{"object":"block","id":"b-2","type":"paragraph","has_children":false,"paragraph":{"rich_text":[],"color":"default"}},
 			{"object":"block","id":"b-3","type":"divider","has_children":false,"divider":{}},
 			{"object":"block","id":"b-4","type":"child_page","has_children":false,"child_page":{"title":"Sub"}},
-			{"object":"block","id":"b-5","type":"unsupported_kind","has_children":false}
+			{"object":"block","id":"b-5","type":"unsupported","has_children":false,"unsupported":{}}
 		],"has_more":false,"next_cursor":null}`})
 
 		got, err := client.ListBlockChildren(context.Background(), "page-id")
@@ -154,7 +154,7 @@ func TestListBlockChildren(t *testing.T) {
 			{ID: "b-2", Type: "paragraph", Text: ""},
 			{ID: "b-3", Type: "divider", Text: ""},
 			{ID: "b-4", Type: "child_page", Text: ""},
-			{ID: "b-5", Type: "unsupported_kind", Text: ""},
+			{ID: "b-5", Type: "unsupported", Text: ""},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("ListBlockChildren() = %#v, want %#v", got, want)
@@ -287,7 +287,8 @@ func TestListBlockChildrenInvalidResponse(t *testing.T) {
 		{name: "block の id が空", body: `{"object":"list","results":[{"object":"block","id":"","type":"paragraph"}],"has_more":false,"next_cursor":null}`, want: "results[0].id must not be empty"},
 		{name: "block の type がない", body: `{"object":"list","results":[{"object":"block","id":"b"}],"has_more":false,"next_cursor":null}`, want: "results[0].type is required"},
 		{name: "block の type が空", body: `{"object":"list","results":[{"object":"block","id":"b","type":""}],"has_more":false,"next_cursor":null}`, want: "results[0].type must not be empty"},
-		{name: "2 件目の block が不正", body: `{"object":"list","results":[{"object":"block","id":"b","type":"paragraph"},{"object":"block","type":"paragraph"}],"has_more":false,"next_cursor":null}`, want: "results[1].id is required"},
+		{name: "2 件目の block が不正", body: `{"object":"list","results":[{"object":"block","id":"b","type":"paragraph","paragraph":{"rich_text":[]}},{"object":"block","type":"paragraph"}],"has_more":false,"next_cursor":null}`, want: "results[1].id is required"},
+		{name: "type と同名のキーがない", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote"}],"has_more":false,"next_cursor":null}`, want: "results[0].quote is required"},
 		{name: "type のオブジェクトがオブジェクトでない", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":"x"}],"has_more":false,"next_cursor":null}`, want: "results[0].quote must be an object"},
 		{name: "type のオブジェクトが null", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":null}],"has_more":false,"next_cursor":null}`, want: "results[0].quote must be an object"},
 		{name: "rich_text が null", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":{"rich_text":null}}],"has_more":false,"next_cursor":null}`, want: "results[0].quote.rich_text is required"},
