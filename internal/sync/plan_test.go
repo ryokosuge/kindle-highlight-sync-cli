@@ -3,6 +3,7 @@ package sync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"testing"
@@ -13,9 +14,12 @@ import (
 )
 
 type fakeDestination struct {
-	matches map[string]destination.BookMatch
-	errs    map[string]error
-	calls   []string
+	matches   map[string]destination.BookMatch
+	errs      map[string]error
+	remoteIDs map[string][]string // ページ ID ごとに ListHighlightIDs が返す Highlight ID
+	listErrs  map[string]error    // ページ ID ごとに ListHighlightIDs が返す error
+	calls     []string
+	listCalls []string // ListHighlightIDs に渡ったページ ID の順
 }
 
 func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destination.BookMatch, error) {
@@ -26,8 +30,16 @@ func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destina
 	return f.matches[book.ID], nil
 }
 
-func (f *fakeDestination) ListHighlightIDs(_ context.Context, _ destination.RemoteBook) (map[string]destination.RemoteHighlight, error) {
-	return nil, nil
+func (f *fakeDestination) ListHighlightIDs(_ context.Context, remote destination.RemoteBook) (map[string]destination.RemoteHighlight, error) {
+	f.listCalls = append(f.listCalls, remote.ID)
+	if err, ok := f.listErrs[remote.ID]; ok {
+		return nil, err
+	}
+	known := make(map[string]destination.RemoteHighlight)
+	for i, id := range f.remoteIDs[remote.ID] {
+		known[id] = destination.RemoteHighlight{ID: fmt.Sprintf("block-%d", i), HighlightID: id}
+	}
+	return known, nil
 }
 
 type fakeSource struct {
@@ -58,8 +70,10 @@ func TestBuildPlan(t *testing.T) {
 		books         []domain.Book
 		matches       map[string]destination.BookMatch
 		highlights    map[string][]domain.Highlight
+		remoteIDs     map[string][]string
 		want          Plan
 		wantListCalls []string
+		wantIDsCalls  []string // ListHighlightIDs を呼ぶのはページがある exact / adoptable だけ
 	}{
 		{
 			name:  "exact の Book は append でページ ID と件数が入る",
@@ -80,6 +94,7 @@ func TestBuildPlan(t *testing.T) {
 				Summary: Summary{ExactMatches: 1, HighlightsToAppend: 2},
 			},
 			wantListCalls: []string{"book-1"},
+			wantIDsCalls:  []string{"page-1"},
 		},
 		{
 			name:  "adoptable の Book は adopt + append でページが入る",
@@ -100,6 +115,7 @@ func TestBuildPlan(t *testing.T) {
 				Summary: Summary{AdoptableMatches: 1, HighlightsToAppend: 1},
 			},
 			wantListCalls: []string{"book-1"},
+			wantIDsCalls:  []string{"page-9"},
 		},
 		{
 			name:  "none の Book は create + append でページは空のまま",
@@ -120,6 +136,7 @@ func TestBuildPlan(t *testing.T) {
 				Summary: Summary{NewBooks: 1, HighlightsToAppend: 3},
 			},
 			wantListCalls: []string{"book-1"},
+			wantIDsCalls:  nil,
 		},
 		{
 			name:  "ambiguous の Book は skip で Highlight を取りに行かない",
@@ -139,6 +156,7 @@ func TestBuildPlan(t *testing.T) {
 				Summary: Summary{Ambiguous: 1},
 			},
 			wantListCalls: nil,
+			wantIDsCalls:  nil,
 		},
 		{
 			name:  "Note だけの Highlight も 1 件と数える",
@@ -159,6 +177,73 @@ func TestBuildPlan(t *testing.T) {
 				Summary: Summary{ExactMatches: 1, HighlightsToAppend: 1},
 			},
 			wantListCalls: []string{"book-1"},
+			wantIDsCalls:  []string{"page-1"},
+		},
+		{
+			name:  "exact の Book は Sync Marker で既知の Highlight を Append から除く",
+			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			matches: map[string]destination.BookMatch{
+				"book-1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
+			},
+			highlights: map[string][]domain.Highlight{
+				"book-1": highlights("a-1", "a-2", "a-3"),
+			},
+			remoteIDs: map[string][]string{"page-1": {"a-2"}},
+			want: Plan{
+				Books: []BookPlan{{
+					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Match:              destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
+					Action:             ActionAppend,
+					HighlightsToAppend: 2,
+				}},
+				Summary: Summary{ExactMatches: 1, HighlightsToAppend: 2},
+			},
+			wantListCalls: []string{"book-1"},
+			wantIDsCalls:  []string{"page-1"},
+		},
+		{
+			name:  "adoptable の Book も Sync Marker で既知の Highlight を Append から除く",
+			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			matches: map[string]destination.BookMatch{
+				"book-1": {Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "page-9"}},
+			},
+			highlights: map[string][]domain.Highlight{
+				"book-1": highlights("a-1", "a-2"),
+			},
+			remoteIDs: map[string][]string{"page-9": {"a-1", "a-2"}},
+			want: Plan{
+				Books: []BookPlan{{
+					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Match:              destination.BookMatch{Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "page-9"}},
+					Action:             ActionAdoptAndAppend,
+					HighlightsToAppend: 0,
+				}},
+				Summary: Summary{AdoptableMatches: 1, HighlightsToAppend: 0},
+			},
+			wantListCalls: []string{"book-1"},
+			wantIDsCalls:  []string{"page-9"},
+		},
+		{
+			name:  "Notion にだけある Highlight ID は Append の数を負にせず数に影響しない",
+			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			matches: map[string]destination.BookMatch{
+				"book-1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
+			},
+			highlights: map[string][]domain.Highlight{
+				"book-1": highlights("a-1"),
+			},
+			remoteIDs: map[string][]string{"page-1": {"a-1", "a-8", "a-9"}},
+			want: Plan{
+				Books: []BookPlan{{
+					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Match:              destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
+					Action:             ActionAppend,
+					HighlightsToAppend: 0,
+				}},
+				Summary: Summary{ExactMatches: 1, HighlightsToAppend: 0},
+			},
+			wantListCalls: []string{"book-1"},
+			wantIDsCalls:  []string{"page-1"},
 		},
 		{
 			name: "複数 Book の summary は各予定の合計",
@@ -185,10 +270,11 @@ func TestBuildPlan(t *testing.T) {
 				"b5": highlights("a-5"),
 				"b6": highlights("a-6"),
 			},
+			remoteIDs: map[string][]string{"p2": {"a-3"}},
 			want: Plan{
 				Books: []BookPlan{
 					{Book: domain.Book{ID: "b1"}, Match: destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p1"}}, Action: ActionAppend, HighlightsToAppend: 1},
-					{Book: domain.Book{ID: "b2"}, Match: destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p2"}}, Action: ActionAppend, HighlightsToAppend: 2},
+					{Book: domain.Book{ID: "b2"}, Match: destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p2"}}, Action: ActionAppend, HighlightsToAppend: 1},
 					{Book: domain.Book{ID: "b3"}, Match: destination.BookMatch{Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "p3"}}, Action: ActionAdoptAndAppend, HighlightsToAppend: 1},
 					{Book: domain.Book{ID: "b4"}, Match: destination.BookMatch{Status: destination.BookMatchNone}, Action: ActionCreateAndAppend},
 					{Book: domain.Book{ID: "b5"}, Match: destination.BookMatch{Status: destination.BookMatchAmbiguous}, Action: ActionSkip},
@@ -199,16 +285,17 @@ func TestBuildPlan(t *testing.T) {
 					AdoptableMatches:   1,
 					NewBooks:           1,
 					Ambiguous:          2,
-					HighlightsToAppend: 4,
+					HighlightsToAppend: 3,
 				},
 			},
 			wantListCalls: []string{"b1", "b2", "b3", "b4"},
+			wantIDsCalls:  []string{"p1", "p2", "p3"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			dst := &fakeDestination{matches: tt.matches}
+			dst := &fakeDestination{matches: tt.matches, remoteIDs: tt.remoteIDs}
 			src := &fakeSource{highlights: tt.highlights}
 			got, err := BuildPlan(context.Background(), tt.books, src, dst)
 			if err != nil {
@@ -227,6 +314,9 @@ func TestBuildPlan(t *testing.T) {
 			if !slices.Equal(src.calls, tt.wantListCalls) {
 				t.Errorf("ListHighlights calls = %v, want %v", src.calls, tt.wantListCalls)
 			}
+			if !slices.Equal(dst.listCalls, tt.wantIDsCalls) {
+				t.Errorf("ListHighlightIDs calls = %v, want %v", dst.listCalls, tt.wantIDsCalls)
+			}
 		})
 	}
 }
@@ -237,20 +327,31 @@ func TestBuildPlanError(t *testing.T) {
 	tests := []struct {
 		name          string
 		dstErrs       map[string]error
+		idsErrs       map[string]error
 		srcErrs       map[string]error
 		wantFindCalls []string
+		wantIDsCalls  []string
 		wantListCalls []string
 	}{
 		{
 			name:          "FindBook が 2 冊目で失敗したら 3 冊目には行かない",
 			dstErrs:       map[string]error{"b2": wantErr},
 			wantFindCalls: []string{"b1", "b2"},
+			wantIDsCalls:  []string{"p1"},
+			wantListCalls: []string{"b1"},
+		},
+		{
+			name:          "ListHighlightIDs が 2 冊目で失敗したら その Book の Highlight は取らず 3 冊目には行かない",
+			idsErrs:       map[string]error{"p2": wantErr},
+			wantFindCalls: []string{"b1", "b2"},
+			wantIDsCalls:  []string{"p1", "p2"},
 			wantListCalls: []string{"b1"},
 		},
 		{
 			name:          "ListHighlights が 2 冊目で失敗したら 3 冊目には行かない",
 			srcErrs:       map[string]error{"b2": wantErr},
 			wantFindCalls: []string{"b1", "b2"},
+			wantIDsCalls:  []string{"p1", "p2"},
 			wantListCalls: []string{"b1", "b2"},
 		},
 	}
@@ -264,7 +365,8 @@ func TestBuildPlanError(t *testing.T) {
 					"b2": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p2"}},
 					"b3": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p3"}},
 				},
-				errs: tt.dstErrs,
+				errs:     tt.dstErrs,
+				listErrs: tt.idsErrs,
 			}
 			src := &fakeSource{
 				highlights: map[string][]domain.Highlight{
@@ -286,6 +388,9 @@ func TestBuildPlanError(t *testing.T) {
 			}
 			if !slices.Equal(dst.calls, tt.wantFindCalls) {
 				t.Errorf("FindBook calls = %v, want %v", dst.calls, tt.wantFindCalls)
+			}
+			if !slices.Equal(dst.listCalls, tt.wantIDsCalls) {
+				t.Errorf("ListHighlightIDs calls = %v, want %v", dst.listCalls, tt.wantIDsCalls)
 			}
 			if !slices.Equal(src.calls, tt.wantListCalls) {
 				t.Errorf("ListHighlights calls = %v, want %v", src.calls, tt.wantListCalls)

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/zalando/go-keyring"
@@ -19,10 +20,11 @@ import (
 
 // validConfigTOML の [notion] に合わせた値。dry-run の end-to-end は config.toml を読んで Notion の代役に向かう。
 const (
-	testDryRunToken     = "test-token-dry-run-80"
-	testDryRunQueryPath = "/v1/data_sources/ds/query"
-	dryRunKindleIDProp  = "Cd34"
-	dryRunTitleProp     = "title"
+	testDryRunToken      = "test-token-dry-run-80"
+	testDryRunQueryPath  = "/v1/data_sources/ds/query"
+	testDryRunBlocksPath = "/v1/blocks/page-exact/children"
+	dryRunKindleIDProp   = "Cd34"
+	dryRunTitleProp      = "title"
 )
 
 var (
@@ -58,6 +60,24 @@ func dryRunQueryBody() string {
 	)
 }
 
+// blockListBody は Book のページの子 block の応答（最後のページ）。
+func blockListBody(blocks ...string) string {
+	return fmt.Sprintf(`{"object":"list","results":[%s],"has_more":false,"next_cursor":null}`, strings.Join(blocks, ","))
+}
+
+// dryRunBlockJSON は Sync Marker 付きの Quote Block の JSON。
+func dryRunBlockJSON(id, text string) string {
+	return fmt.Sprintf(`{"object":"block","id":%q,"type":"quote","quote":{"rich_text":[{"plain_text":%q}]}}`, id, text)
+}
+
+// dryRunReplies は path ごとの Notion の応答。exact のページの子 block には dryRunBookExact の 1 件目の Sync Marker がある。
+func dryRunReplies() map[string]string {
+	return map[string]string{
+		testDryRunQueryPath:  dryRunQueryBody(),
+		testDryRunBlocksPath: blockListBody(dryRunBlockJSON("block-1", "Distinctive Highlight Text\nkhs:"+dryRunHighlights[dryRunBookExact.ID][0].ID)),
+	}
+}
+
 // newDryRunBrowser は Notebook に到達し dryRunBooks とその Highlight を返す fake。
 func newDryRunBrowser() *fakeBrowser {
 	return &fakeBrowser{
@@ -69,12 +89,18 @@ func newDryRunBrowser() *fakeBrowser {
 	}
 }
 
-// setupDryRunNotion は token を環境変数に置き、newNotionClient を body を返す Notion の代役に向ける。
-func setupDryRunNotion(t *testing.T, body string) (requests func() []recordedRequest, clientCalls func() int) {
+// setupDryRunNotion は token を環境変数に置き、newNotionClient を path ごとに replies の body を返す Notion の代役に向ける。
+// replies に無い path には空の JSON を返し、Client が invalid response で止まる。
+func setupDryRunNotion(t *testing.T, replies map[string]string) (requests func() []recordedRequest, clientCalls func() int) {
 	t.Helper()
 	keyring.MockInit()
 	t.Setenv(secrets.EnvNotionToken, testDryRunToken)
-	srv, requests := newNotionServer(t, body)
+	srv, requests := newNotionServerFunc(t, func(path string) string {
+		if body, ok := replies[path]; ok {
+			return body
+		}
+		return "{}"
+	})
 	return requests, stubNewNotionClient(t, srv)
 }
 
@@ -103,22 +129,22 @@ func dataDirEntries(t *testing.T, dataDir string) []string {
 	return names
 }
 
-func assertOnlyQueryRequests(t *testing.T, got []recordedRequest, want int) {
+// assertRequests は Notion に届いた要求の method と path の列が want（"METHOD path"）と一致することを確かめる。
+func assertRequests(t *testing.T, got []recordedRequest, want ...string) {
 	t.Helper()
-	if len(got) != want {
-		t.Fatalf("requests = %+v, want %d requests", got, want)
+	lines := make([]string, 0, len(got))
+	for _, r := range got {
+		lines = append(lines, r.method+" "+r.path)
 	}
-	for i, r := range got {
-		if r.method != "POST" || r.path != testDryRunQueryPath {
-			t.Errorf("requests[%d] = %s %s, want POST %s", i, r.method, r.path, testDryRunQueryPath)
-		}
+	if !slices.Equal(lines, want) {
+		t.Errorf("requests = %q, want %q", lines, want)
 	}
 }
 
 func TestSyncDryRun(t *testing.T) {
 	t.Run("排他の内側で Book を取得・照合し、予定の表と summary を標準出力に出して exit 0 で終わる", func(t *testing.T) {
 		p := setupXDG(t, validConfigTOML)
-		requests, _ := setupDryRunNotion(t, dryRunQueryBody())
+		requests, _ := setupDryRunNotion(t, dryRunReplies())
 		b := newDryRunBrowser()
 		stubBrowser(t, b, nil)
 		if got := dataDirEntries(t, p.DataDir); got != nil {
@@ -142,7 +168,7 @@ func TestSyncDryRun(t *testing.T) {
 			{"Adoptable matches", "0"},
 			{"New books", "1"},
 			{"Ambiguous", "1"},
-			{"Highlights to append", "3"},
+			{"Highlights to append", "2"}, // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
 		}
 		if got := planCells(t, stdout); !reflect.DeepEqual(got, want) {
 			t.Errorf("run(sync --dry-run) stdout cells = %q, want %q", got, want)
@@ -154,8 +180,8 @@ func TestSyncDryRun(t *testing.T) {
 		if !b.closed {
 			t.Error("browser not closed")
 		}
-		// Notion への要求は Data Source の query だけで、ページ・Property・block を変える要求は無い
-		assertOnlyQueryRequests(t, requests(), 1)
+		// Notion への要求は Data Source の query と、ページがある exact の Book の子 block の読み取りだけで、ページ・Property・block を変える要求は無い
+		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath)
 		// state.db は作られず、data ディレクトリには run.lock しか増えない
 		if got, want := dataDirEntries(t, p.DataDir), []string{"run.lock"}; !slices.Equal(got, want) {
 			t.Errorf("data dir entries after sync = %v, want %v", got, want)
@@ -180,7 +206,8 @@ func TestSyncDryRun(t *testing.T) {
 			wantCells   [][]string
 			wantHLBooks []domain.Book
 			wantStderr  string
-			wantQueries int // Notion への Data Source の query の数（Book が 1 冊も残らなければ照合しない）
+			// Notion への要求（Book が 1 冊も残らなければ照合せず、exact の Book が残れば子 block も読む）
+			wantRequests []string
 		}{
 			{
 				name:  "ASIN の無い Book が混ざる",
@@ -189,24 +216,24 @@ func TestSyncDryRun(t *testing.T) {
 					header,
 					{dryRunBookExact.Title, "exact", "page-exact", "append"},
 					{dryRunBookNew.Title, "none", "-", "create + append"},
-				}, summary("1", "1", "3")...),
-				wantHLBooks: []domain.Book{dryRunBookExact, dryRunBookNew},
-				wantStderr:  "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
-				wantQueries: 1,
+				}, summary("1", "1", "2")...), // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
+				wantHLBooks:  []domain.Book{dryRunBookExact, dryRunBookNew},
+				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantRequests: []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath},
 			},
 			{
-				name:        "ASIN の無い Book だけ",
-				books:       []domain.Book{dryRunBookNoASIN},
-				wantCells:   append([][]string{header}, summary("0", "0", "0")...),
-				wantHLBooks: nil,
-				wantStderr:  "source format error: sync: highlights of 1 of 1 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
-				wantQueries: 0,
+				name:         "ASIN の無い Book だけ",
+				books:        []domain.Book{dryRunBookNoASIN},
+				wantCells:    append([][]string{header}, summary("0", "0", "0")...),
+				wantHLBooks:  nil,
+				wantStderr:   "source format error: sync: highlights of 1 of 1 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantRequests: nil,
 			},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				setupXDG(t, validConfigTOML)
-				requests, _ := setupDryRunNotion(t, dryRunQueryBody())
+				requests, _ := setupDryRunNotion(t, dryRunReplies())
 				b := newDryRunBrowser()
 				b.books = tt.books
 				stubBrowser(t, b, nil)
@@ -224,7 +251,7 @@ func TestSyncDryRun(t *testing.T) {
 				if !slices.Equal(b.hlBooks, tt.wantHLBooks) {
 					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, tt.wantHLBooks)
 				}
-				assertOnlyQueryRequests(t, requests(), tt.wantQueries)
+				assertRequests(t, requests(), tt.wantRequests...)
 			})
 		}
 	})
@@ -236,18 +263,18 @@ func TestSyncDryRun(t *testing.T) {
 			configTOML   string
 			token        string
 			keychainErr  error // nil 以外なら Keychain の読み取りがこの失敗を返す
-			notionBody   string
+			replies      map[string]string
 			pageHTML     []byte
 			wantCode     int
 			wantStderr   func(p config.Paths) string
-			wantRequests int
+			wantRequests []string
 			wantHLBooks  int
 		}{
 			{
 				name:       "認証切れでは exit 2",
 				configTOML: validConfigTOML,
 				token:      testDryRunToken,
-				notionBody: dryRunQueryBody(),
+				replies:    dryRunReplies(),
 				pageHTML:   []byte(`<form name="signIn"><input name="email"></form>`),
 				wantCode:   2,
 				wantStderr: func(config.Paths) string {
@@ -258,18 +285,29 @@ func TestSyncDryRun(t *testing.T) {
 				name:       "Notion の取得の失敗では exit 4",
 				configTOML: validConfigTOML,
 				token:      testDryRunToken,
-				notionBody: "not json",
+				replies:    map[string]string{testDryRunQueryPath: "not json"},
 				wantCode:   4,
 				wantStderr: func(config.Paths) string {
 					return "Notion error: notion: POST " + testDryRunQueryPath + ": invalid response JSON\n"
 				},
-				wantRequests: 1,
+				wantRequests: []string{"POST " + testDryRunQueryPath},
+			},
+			{
+				name:       "Notion の子 block の取得の失敗でも exit 4",
+				configTOML: validConfigTOML,
+				token:      testDryRunToken,
+				replies:    map[string]string{testDryRunQueryPath: dryRunQueryBody(), testDryRunBlocksPath: "not json"},
+				wantCode:   4,
+				wantStderr: func(config.Paths) string {
+					return "Notion error: notion: GET " + testDryRunBlocksPath + "?page_size=100: invalid response JSON\n"
+				},
+				wantRequests: []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath},
 			},
 			{
 				name:       "config.toml が無ければ exit 3",
 				configTOML: "",
 				token:      testDryRunToken,
-				notionBody: dryRunQueryBody(),
+				replies:    dryRunReplies(),
 				wantCode:   3,
 				wantStderr: func(p config.Paths) string {
 					return "configuration / confirmation required: " + p.ConfigFile + " not found: run `kindle-highlight-sync init` to create it\n"
@@ -279,7 +317,7 @@ func TestSyncDryRun(t *testing.T) {
 				name:       "token が無ければ exit 3",
 				configTOML: validConfigTOML,
 				token:      "",
-				notionBody: dryRunQueryBody(),
+				replies:    dryRunReplies(),
 				wantCode:   3,
 				wantStderr: func(config.Paths) string {
 					return "configuration / confirmation required: notion token not found in KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN or Keychain: run `kindle-highlight-sync init` to save it\n"
@@ -291,7 +329,7 @@ func TestSyncDryRun(t *testing.T) {
 				configTOML:  validConfigTOML,
 				token:       "",
 				keychainErr: keychainErr,
-				notionBody:  dryRunQueryBody(),
+				replies:     dryRunReplies(),
 				wantCode:    1,
 				wantStderr: func(config.Paths) string {
 					return "general error: cannot read Notion token in Keychain (service kindle-highlight-sync, account notion-token)\n"
@@ -301,7 +339,7 @@ func TestSyncDryRun(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				p := setupXDG(t, tt.configTOML)
-				requests, _ := setupDryRunNotion(t, tt.notionBody)
+				requests, _ := setupDryRunNotion(t, tt.replies)
 				t.Setenv(secrets.EnvNotionToken, tt.token)
 				if tt.keychainErr != nil {
 					keyring.MockInitWithError(tt.keychainErr)
@@ -328,14 +366,14 @@ func TestSyncDryRun(t *testing.T) {
 				if !b.closed {
 					t.Error("browser not closed")
 				}
-				assertOnlyQueryRequests(t, requests(), tt.wantRequests)
+				assertRequests(t, requests(), tt.wantRequests...)
 			})
 		}
 	})
 
 	t.Run("--dry-run を付けない sync は Notion に要求せず、標準出力に何も出さない", func(t *testing.T) {
 		setupXDG(t, validConfigTOML)
-		requests, clientCalls := setupDryRunNotion(t, dryRunQueryBody())
+		requests, clientCalls := setupDryRunNotion(t, dryRunReplies())
 		b := newDryRunBrowser()
 		stubBrowser(t, b, nil)
 
@@ -349,12 +387,12 @@ func TestSyncDryRun(t *testing.T) {
 		if got := clientCalls(); got != 0 {
 			t.Errorf("newNotionClient calls = %d, want 0", got)
 		}
-		assertOnlyQueryRequests(t, requests(), 0)
+		assertRequests(t, requests())
 	})
 
 	t.Run("本物の sync が排他を持っている間の dry-run は待たずに exit 9 で終わる", func(t *testing.T) {
 		setupXDG(t, validConfigTOML)
-		_, clientCalls := setupDryRunNotion(t, dryRunQueryBody())
+		_, clientCalls := setupDryRunNotion(t, dryRunReplies())
 		_, s := stubReachedBrowser(t)
 		release, done := holdLock(t, "sync")
 
