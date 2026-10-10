@@ -12,6 +12,7 @@ type browser interface {
 	OpenNotebook(ctx context.Context) (bool, error)
 	Page(ctx context.Context) (finalURL string, html []byte, err error)
 	ListBooks(ctx context.Context) ([]domain.Book, error)
+	ListHighlights(ctx context.Context, book domain.Book) ([]domain.Highlight, error)
 	WaitNotebook(ctx context.Context) error
 	Close() error
 }

@@ -86,19 +86,29 @@ func TestSync(t *testing.T) {
 		}
 	})
 
-	t.Run("Notebook に到達し認証を確かめたあと Book 一覧を最後まで取得して exit 0 で終わり、Book を出力しない", func(t *testing.T) {
+	t.Run("Notebook に到達し認証を確かめたあと Book 一覧を最後まで取得し、Book ごとに全 Highlight を取得して exit 0 で終わり、Book と Highlight を出力しない", func(t *testing.T) {
 		setupXDG(t, "")
+		books := []domain.Book{
+			{ID: "book-id-1", Title: "Distinctive Book One"},
+			{ID: "book-id-2", Title: "Distinctive Book Two"},
+			{ID: "book-id-3", Title: "Distinctive Book Three"},
+		}
 		b := &fakeBrowser{
 			reached: true,
-			books: []domain.Book{
-				{ID: "book-id-1", Title: "Distinctive Book One"},
-				{ID: "book-id-2", Title: "Distinctive Book Two"},
+			books:   books,
+			highlights: map[string][]domain.Highlight{
+				"book-id-1": {
+					{ID: "a-HIGHLIGHT-1", BookID: "book-id-1", Text: "Distinctive Highlight Text", Note: "Distinctive Note"},
+					{ID: "a-NOTE-2", BookID: "book-id-1", Note: "Distinctive Note Only"},
+				},
+				"book-id-3": {{ID: "a-HIGHLIGHT-3", BookID: "book-id-3", Text: "Distinctive Highlight Three"}},
 			},
 			pageURL:  "https://read.amazon.co.jp/notebook",
 			pageHTML: []byte(`<div id="kp-notebook-library"></div>`),
 		}
 		stubBrowser(t, b, nil)
 
+		// runSync は stdout が空であることも確かめる。stderr も空なので Highlight の本文・Note・件数はどこにも出ない
 		code, stderr := runSync(t)
 		if code != 0 {
 			t.Errorf("run(sync) code = %d, want 0", code)
@@ -106,11 +116,70 @@ func TestSync(t *testing.T) {
 		if stderr != "" {
 			t.Errorf("run(sync) stderr = %q, want empty", stderr)
 		}
-		if want := []string{"OpenNotebook", "Page", "ListBooks", "Close"}; !slices.Equal(b.calls, want) {
+		want := []string{"OpenNotebook", "Page", "ListBooks", "ListHighlights", "ListHighlights", "ListHighlights", "Close"}
+		if !slices.Equal(b.calls, want) {
 			t.Errorf("calls = %v, want %v", b.calls, want)
 		}
 		if b.listCalled != 1 {
 			t.Errorf("ListBooks() called %d times, want 1", b.listCalled)
+		}
+		if !slices.Equal(b.hlBooks, books) {
+			t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, books)
+		}
+	})
+
+	t.Run("ある Book の Highlight の取得に失敗したら exit 0 で終わらず、その失敗をそのまま返して残りの Book は取得しない", func(t *testing.T) {
+		books := []domain.Book{
+			{ID: "book-id-1", Title: "Distinctive Book One"},
+			{ID: "book-id-2", Title: "Distinctive Book Two"},
+			{ID: "book-id-3", Title: "Distinctive Book Three"},
+		}
+		tests := []struct {
+			name       string
+			err        error
+			wantCode   int
+			wantStderr string
+		}{
+			{
+				name:       "種類を持たない失敗",
+				err:        errors.New("source: list highlights B000000002: page 2: boom"),
+				wantCode:   1,
+				wantStderr: "general error: source: list highlights B000000002: page 2: boom\n",
+			},
+			{
+				name:       "SourceFormat の失敗",
+				err:        exitcode.New(exitcode.SourceFormat, errors.New("source: list highlights B000000002: page 1: ...")),
+				wantCode:   7,
+				wantStderr: "source format error: source: list highlights B000000002: page 1: ...\n",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				setupXDG(t, "")
+				b := &fakeBrowser{
+					reached: true,
+					books:   books,
+					highlights: map[string][]domain.Highlight{
+						"book-id-1": {{ID: "a-HIGHLIGHT-1", BookID: "book-id-1", Text: "Distinctive Highlight Text", Note: "Distinctive Note"}},
+					},
+					highlightErr: map[string]error{"book-id-2": tt.err},
+				}
+				stubBrowser(t, b, nil)
+
+				code, stderr := runSync(t)
+				if code != tt.wantCode {
+					t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
+				}
+				if stderr != tt.wantStderr {
+					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
+				}
+				if want := books[:2]; !slices.Equal(b.hlBooks, want) {
+					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
+				}
+				if !b.closed {
+					t.Error("browser not closed")
+				}
+			})
 		}
 	})
 
@@ -137,7 +206,8 @@ func TestSync(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				setupXDG(t, "")
-				b := &fakeBrowser{reached: true, listErr: tt.listErr}
+				// 失敗と一緒に Book を返しても、Highlight の取得に進まないことを確かめる
+				b := &fakeBrowser{reached: true, listErr: tt.listErr, books: []domain.Book{{ID: "book-id-1"}}}
 				stubBrowser(t, b, nil)
 
 				code, stderr := runSync(t)
@@ -152,6 +222,9 @@ func TestSync(t *testing.T) {
 				}
 				if b.listCalled != 1 {
 					t.Errorf("ListBooks() called %d times, want 1", b.listCalled)
+				}
+				if len(b.hlBooks) != 0 {
+					t.Errorf("ListHighlights() books = %+v, want none", b.hlBooks)
 				}
 			})
 		}
@@ -208,9 +281,9 @@ func TestSync(t *testing.T) {
 		}
 	})
 
-	t.Run("Notebook を開く action には 1 分の期限が付き、Open と Book 一覧の取得に渡す ctx には付かない", func(t *testing.T) {
+	t.Run("Notebook を開く action には 1 分の期限が付き、Open と Book 一覧・Highlight の取得に渡す ctx には付かない", func(t *testing.T) {
 		setupXDG(t, "")
-		b := &fakeBrowser{reached: true}
+		b := &fakeBrowser{reached: true, books: []domain.Book{{ID: "book-id-1"}, {ID: "book-id-2"}}}
 		// stubBrowser は渡った ctx を見ないので、fake を返す関数の中で期限の無いことを確かめる
 		orig := openBrowser
 		openBrowser = func(ctx context.Context, _ source.Options) (browser, error) {
@@ -235,6 +308,9 @@ func TestSync(t *testing.T) {
 		}
 		if !b.listDeadline.IsZero() {
 			t.Errorf("ListBooks ctx has deadline %v, want none", b.listDeadline)
+		}
+		if want := []time.Time{{}, {}}; !slices.Equal(b.hlDeadlines, want) {
+			t.Errorf("ListHighlights ctx deadlines = %v, want none for 2 Books", b.hlDeadlines)
 		}
 	})
 
@@ -398,17 +474,25 @@ func TestSync(t *testing.T) {
 			name       string
 			reached    bool
 			listErr    error
+			hlErr      error
 			wantCode   int
 			wantStderr string
 		}{
 			{name: "到達して閉じるのに失敗", reached: true, wantCode: 5, wantStderr: "browser error: source: close browser: boom\n"},
 			{name: "未到達を優先する", reached: false, wantCode: 1, wantStderr: "general error: sync: kindle notebook not reached\n"},
 			{name: "取得の失敗を優先する", reached: true, listErr: errors.New("source: list books: page 1: boom"), wantCode: 1, wantStderr: "general error: source: list books: page 1: boom\n"},
+			{name: "Highlight の取得の失敗を優先する", reached: true, hlErr: errors.New("source: list highlights B000000001: page 1: boom"), wantCode: 1, wantStderr: "general error: source: list highlights B000000001: page 1: boom\n"},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				setupXDG(t, "")
-				stubBrowser(t, &fakeBrowser{reached: tt.reached, listErr: tt.listErr, closeErr: closeErr}, nil)
+				stubBrowser(t, &fakeBrowser{
+					reached:      tt.reached,
+					listErr:      tt.listErr,
+					books:        []domain.Book{{ID: "book-id-1"}},
+					highlightErr: map[string]error{"book-id-1": tt.hlErr},
+					closeErr:     closeErr,
+				}, nil)
 
 				code, stderr := runSync(t)
 				if code != tt.wantCode {
