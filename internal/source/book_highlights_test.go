@@ -376,7 +376,8 @@ func TestListHighlightEntriesError(t *testing.T) {
 		pages     map[string]fakeHighlightsPage
 		want      string
 		wantIs    error
-		wantCode  int // 構造の異常は 7（SourceFormat）、取得そのものの失敗・ctx・ASIN 空は 1（種類なし）
+		wantCode  int  // 構造の異常は 7（SourceFormat）、取得そのものの失敗・ctx・ASIN 空は 1（種類なし）
+		wantFrame bool // 全 Book に共通の枠（続きの印）の異常にだけ ErrHighlightsFrame が付く。行の異常・続きの印の再利用・ASIN 空には付かない
 		wantCalls []highlightsCall
 	}{
 		{
@@ -401,9 +402,10 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"":                    {fixture: "highlights_first.html"},
 				"aaaa9999BBBB%2Baaaa": {html: "<p>broken</p>"},
 			},
-			want:     "source: list highlights AAAAAAAAA1: page 2: source: highlights page: next page token input is missing: unexpected notebook structure",
-			wantIs:   ErrSourceFormat,
-			wantCode: 7,
+			want:      "source: list highlights AAAAAAAAA1: page 2: source: highlights page: highlights frame is unreadable: next page token input is missing: unexpected notebook structure",
+			wantIs:    ErrSourceFormat,
+			wantCode:  7,
+			wantFrame: true,
 			wantCalls: []highlightsCall{
 				{asin: "AAAAAAAAA1"},
 				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -416,9 +418,10 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"":                    {fixture: "highlights_first.html"},
 				"aaaa9999BBBB%2Baaaa": {fixture: "highlights_next_token_no_value.html"},
 			},
-			want:     "source: list highlights AAAAAAAAA1: page 2: source: highlights page: next page token input has no value attribute: unexpected notebook structure",
-			wantIs:   ErrSourceFormat,
-			wantCode: 7,
+			want:      "source: list highlights AAAAAAAAA1: page 2: source: highlights page: highlights frame is unreadable: next page token input has no value attribute: unexpected notebook structure",
+			wantIs:    ErrSourceFormat,
+			wantCode:  7,
+			wantFrame: true,
 			wantCalls: []highlightsCall{
 				{asin: "AAAAAAAAA1"},
 				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
@@ -519,6 +522,9 @@ func TestListHighlightEntriesError(t *testing.T) {
 			}
 			if got, want := errors.Is(err, ErrSourceFormat), tt.wantCode == 7; got != want {
 				t.Errorf("errors.Is(err, ErrSourceFormat) = %v, want %v", got, want)
+			}
+			if got := errors.Is(err, ErrHighlightsFrame); got != tt.wantFrame {
+				t.Errorf("errors.Is(err, ErrHighlightsFrame) = %v, want %v", got, tt.wantFrame)
 			}
 			for _, leak := range []string{"aaaa9999", "合成の本文", "合成の Note", "合成の書名", "<input", "<div"} {
 				if strings.Contains(err.Error(), leak) {
