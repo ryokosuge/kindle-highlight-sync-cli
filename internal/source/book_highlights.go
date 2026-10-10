@@ -35,8 +35,8 @@ func listHighlights(ctx context.Context, book domain.Book, fetch fetchHighlights
 	for i, e := range entries {
 		id, err := domain.NewHighlightID(e.RawID, book.ASIN)
 		if err != nil {
-			// 行 id が読めない行に別方式の ID を作らない（§16.1）。原因（domain.ErrMissingAnnotationID）も errors.Is で辿れるよう残す。
-			return nil, fmt.Errorf("source: list highlights %s: row %d: %w", book.ASIN, i+1, wrapFormatError(err))
+			// 行 id が読めない行に別方式の ID を作らない（§16.1）。原因（domain.ErrMissingAnnotationID）と SourceFormat の両方を %w で併記し、errors.Is でどちらも辿れるようにする。
+			return nil, fmt.Errorf("source: list highlights %s: row %d: %w: %w", book.ASIN, i+1, err, newFormatError("highlight ID cannot be made from row id"))
 		}
 		if seen[id] {
 			// 行 id の重複でだけ起きる。黙ってまとめると Note が消えるのでエラーにする。

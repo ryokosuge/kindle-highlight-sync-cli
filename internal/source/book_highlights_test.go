@@ -239,7 +239,7 @@ func TestListHighlightsIDError(t *testing.T) {
 			pages: map[string]fakeHighlightsPage{
 				"": {html: `<input type="hidden" class="kp-notebook-annotations-next-page-start" value=""><div class="a-row a-spacing-base"><input type="hidden" id="kp-annotation-location" value="99"><div class="kp-notebook-highlight"><span id="highlight">合成の本文 id なし</span></div></div>`},
 			},
-			want:    "source: list highlights AAAAAAAAA1: row 1: domain: annotation ID is not available: row id is empty: unexpected notebook structure",
+			want:    "source: list highlights AAAAAAAAA1: row 1: domain: annotation ID is not available: row id is empty: highlight ID cannot be made from row id: unexpected notebook structure",
 			notWant: []string{"合成の本文 id なし", "<div"},
 		},
 		{
@@ -250,7 +250,7 @@ func TestListHighlightsIDError(t *testing.T) {
 				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleHTML},
 				"aaaa9999CCCC%2Baaaa": {fixture: "highlights_next.html"},
 			},
-			want: "source: list highlights AAAAAAAAA1: row 3: domain: annotation ID is not available: row id is not base64: unexpected notebook structure",
+			want: "source: list highlights AAAAAAAAA1: row 3: domain: annotation ID is not available: row id is not base64: highlight ID cannot be made from row id: unexpected notebook structure",
 			notWant: []string{
 				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAx",
 				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTpISUdITElHSFQ6YTAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMw",
@@ -266,7 +266,7 @@ func TestListHighlightsIDError(t *testing.T) {
 			pages: map[string]fakeHighlightsPage{
 				"": {fixture: "highlights_next.html"},
 			},
-			want: "source: list highlights AAAAAAAAA2: row 1: domain: annotation ID is not available: row id belongs to another book: unexpected notebook structure",
+			want: "source: list highlights AAAAAAAAA2: row 1: domain: annotation ID is not available: row id belongs to another book: highlight ID cannot be made from row id: unexpected notebook structure",
 			notWant: []string{
 				"合成の書名 B",
 				"合成の本文",

@@ -16,10 +16,3 @@ var ErrSourceFormat = errors.New("unexpected notebook structure")
 func newFormatError(what string) error {
 	return exitcode.New(exitcode.SourceFormat, fmt.Errorf("%s: %w", what, ErrSourceFormat))
 }
-
-// wrapFormatError は原因の err を %w で残したまま SourceFormat（exit 7）の種類で包む。
-// 行 id から Highlight ID が作れない（domain.ErrMissingAnnotationID）ように、原因の種類も errors.Is で辿らせたいときに使う。
-// 文言は err の文言に ErrSourceFormat を続けた形で、newFormatError と同じく HTML から取り出した値を足さない。
-func wrapFormatError(err error) error {
-	return exitcode.New(exitcode.SourceFormat, fmt.Errorf("%w: %w", err, ErrSourceFormat))
-}
