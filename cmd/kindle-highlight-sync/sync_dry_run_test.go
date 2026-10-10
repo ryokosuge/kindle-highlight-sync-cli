@@ -30,7 +30,9 @@ var (
 	dryRunBookNew       = domain.Book{ID: "B000000002", ASIN: "B000000002", Title: "Distinctive New Book"}
 	dryRunBookAmbiguous = domain.Book{ID: "B000000003", ASIN: "B000000003", Title: "Distinctive Ambiguous Book"}
 	dryRunBooks         = []domain.Book{dryRunBookExact, dryRunBookNew, dryRunBookAmbiguous}
-	dryRunHighlights    = map[string][]domain.Highlight{
+	// ASIN が無く Highlight のページを開けない Book（Book ID は §13 の b1-）
+	dryRunBookNoASIN = domain.Book{ID: "b1-0123456789abcdef0123456789abcdef", Title: "Distinctive No ASIN Book"}
+	dryRunHighlights = map[string][]domain.Highlight{
 		dryRunBookExact.ID: {
 			{ID: "a-HIGHLIGHT-1", BookID: dryRunBookExact.ID, Text: "Distinctive Highlight Text"},
 			{ID: "a-NOTE-2", BookID: dryRunBookExact.ID, Note: "Distinctive Note Only"},
@@ -157,6 +159,73 @@ func TestSyncDryRun(t *testing.T) {
 		// state.db は作られず、data ディレクトリには run.lock しか増えない
 		if got, want := dataDirEntries(t, p.DataDir), []string{"run.lock"}; !slices.Equal(got, want) {
 			t.Errorf("data dir entries after sync = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("ASIN の無い Book は Highlight を取らずに失敗として数え、残りの Book の予定を出して exit 7 で終わる", func(t *testing.T) {
+		summary := func(exact, newBooks, highlights string) [][]string {
+			return [][]string{
+				{},
+				{"Exact matches", exact},
+				{"Adoptable matches", "0"},
+				{"New books", newBooks},
+				{"Ambiguous", "0"},
+				{"Highlights to append", highlights},
+			}
+		}
+		header := []string{"Kindle Book", "Match Status", "Matched Notion Page", "Action"}
+		tests := []struct {
+			name        string
+			books       []domain.Book
+			wantCells   [][]string
+			wantHLBooks []domain.Book
+			wantStderr  string
+			wantQueries int // Notion への Data Source の query の数（Book が 1 冊も残らなければ照合しない）
+		}{
+			{
+				name:  "ASIN の無い Book が混ざる",
+				books: []domain.Book{dryRunBookExact, dryRunBookNoASIN, dryRunBookNew},
+				wantCells: append([][]string{
+					header,
+					{dryRunBookExact.Title, "exact", "page-exact", "append"},
+					{dryRunBookNew.Title, "none", "-", "create + append"},
+				}, summary("1", "1", "3")...),
+				wantHLBooks: []domain.Book{dryRunBookExact, dryRunBookNew},
+				wantStderr:  "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantQueries: 1,
+			},
+			{
+				name:        "ASIN の無い Book だけ",
+				books:       []domain.Book{dryRunBookNoASIN},
+				wantCells:   append([][]string{header}, summary("0", "0", "0")...),
+				wantHLBooks: nil,
+				wantStderr:  "source format error: sync: highlights of 1 of 1 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantQueries: 0,
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				setupXDG(t, validConfigTOML)
+				requests, _ := setupDryRunNotion(t, dryRunQueryBody())
+				b := newDryRunBrowser()
+				b.books = tt.books
+				stubBrowser(t, b, nil)
+
+				code, stdout, stderr := runSyncDryRun(t)
+				if code != 7 {
+					t.Errorf("run(sync --dry-run) = %d, want 7 (stderr = %q)", code, stderr)
+				}
+				if stderr != tt.wantStderr {
+					t.Errorf("stderr = %q, want %q", stderr, tt.wantStderr)
+				}
+				if got := planCells(t, stdout); !reflect.DeepEqual(got, tt.wantCells) {
+					t.Errorf("run(sync --dry-run) stdout cells = %q, want %q", got, tt.wantCells)
+				}
+				if !slices.Equal(b.hlBooks, tt.wantHLBooks) {
+					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, tt.wantHLBooks)
+				}
+				assertOnlyQueryRequests(t, requests(), tt.wantQueries)
+			})
 		}
 	})
 

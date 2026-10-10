@@ -134,16 +134,33 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 
 // writeDryRunPlan は Book を Notion と照合して予定を組み、表と summary を a.out に書く（§63 / §64）。
 // 同期先の組み立て（exit 3）と照合（exit 4）の失敗は種類を変えずに返し、予定は出さない。
+// writeDryRunPlan は dry-run の予定を a.out に出す。ASIN の無い Book は Highlight のページを開けないので、通常の sync と同じく
+// bookFailureNoASIN に集めて予定の組み立てから除き、残りの Book の予定を出したあとに SourceFormat（exit 7）で終わる（§72）。
 func writeDryRunPlan(ctx context.Context, a *app, books []domain.Book, src browser) error {
 	dst, err := newDestination(a)
 	if err != nil {
 		return err
 	}
-	plan, err := syncengine.BuildPlan(ctx, books, src, dst)
+	var failed []bookFailure
+	planned := make([]domain.Book, 0, len(books))
+	for _, book := range books {
+		if book.ASIN == "" {
+			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
+			continue
+		}
+		planned = append(planned, book)
+	}
+	plan, err := syncengine.BuildPlan(ctx, planned, src, dst)
 	if err != nil {
 		return err
 	}
-	return writePlan(a.out, plan)
+	if err := writePlan(a.out, plan); err != nil {
+		return err
+	}
+	if len(failed) > 0 {
+		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
+	}
+	return nil
 }
 
 func newSyncCmd(a *app) *cobra.Command {
