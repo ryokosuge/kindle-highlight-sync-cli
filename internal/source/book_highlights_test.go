@@ -9,6 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 )
 
 func TestHighlightsURL(t *testing.T) {
@@ -171,6 +174,164 @@ func TestListHighlightEntries(t *testing.T) {
 				t.Errorf("listHighlightEntries() calls = %+v, want %+v", *calls, tt.wantCalls)
 			}
 		})
+	}
+}
+
+func TestListHighlights(t *testing.T) {
+	const asin = "AAAAAAAAA1"
+	book := domain.Book{ID: asin, ASIN: asin, Title: "合成の書名 A"}
+	pages := map[string]fakeHighlightsPage{
+		"":                    {html: withNextToken(t, "highlights_empty_text.html", "aaaa9999BBBB%2Baaaa")},
+		"aaaa9999BBBB%2Baaaa": {html: withNextToken(t, "highlights_note_only.html", "aaaa9999CCCC%2Baaaa")},
+		"aaaa9999CCCC%2Baaaa": {fixture: "highlights_next.html"},
+	}
+	fetch, calls := fakeHighlightsFetch(t, pages, nil)
+	got, err := listHighlights(context.Background(), book, fetch)
+	if err != nil {
+		t.Fatalf("listHighlights() error = %v", err)
+	}
+	want := []domain.Highlight{
+		{ID: "a-highlight-a00000000-0000-4000-8000-000000000001", BookID: book.ID, Text: "", Note: "", Location: "99", Page: ""},
+		{ID: "a-note-a00000000-0000-4000-8000-000000000005", BookID: book.ID, Text: "", Note: "合成の Note だけ", Location: "999", Page: ""},
+		{ID: "a-highlight-aaaaaa999999", BookID: book.ID, Text: "合成の本文 3", Note: "", Location: "9999", Page: ""},
+		{ID: "a-highlight-a00000000-0000-4000-8000-000000000006", BookID: book.ID, Text: "合成の本文 4", Note: "合成の Note 4", Location: "99999", Page: ""},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("listHighlights() = %+v, want %+v", got, want)
+	}
+	for i, h := range got {
+		if got := domain.IsAdoptedHighlightID(h.ID); !got {
+			t.Errorf("domain.IsAdoptedHighlightID(got[%d].ID) = %v, want %v", i, got, true)
+		}
+	}
+	wantCalls := []highlightsCall{
+		{asin: asin},
+		{asin: asin, token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
+		{asin: asin, token: "aaaa9999CCCC%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
+	}
+	if !reflect.DeepEqual(*calls, wantCalls) {
+		t.Errorf("listHighlights() calls = %+v, want %+v", *calls, wantCalls)
+	}
+}
+
+func withNextToken(t *testing.T, fixture, token string) string {
+	t.Helper()
+	const marker = `class="kp-notebook-annotations-next-page-start" value=""`
+	html := string(readFixture(t, fixture))
+	if got := strings.Count(html, marker); got != 1 {
+		t.Fatalf("strings.Count(%q, marker) = %d, want %d", fixture, got, 1)
+	}
+	return strings.Replace(html, marker, `class="kp-notebook-annotations-next-page-start" value="`+token+`"`, 1)
+}
+
+func TestListHighlightsIDError(t *testing.T) {
+	const asin = "AAAAAAAAA1"
+	tests := []struct {
+		name    string
+		book    domain.Book
+		pages   map[string]fakeHighlightsPage
+		notWant []string
+	}{
+		{
+			name: "途中のページの行 id が base64 でない",
+			book: domain.Book{ID: asin, ASIN: asin},
+			pages: map[string]fakeHighlightsPage{
+				"":                    {fixture: "highlights_first.html"},
+				"aaaa9999BBBB%2Baaaa": {html: highlightsMiddleHTML},
+				"aaaa9999CCCC%2Baaaa": {fixture: "highlights_next.html"},
+			},
+			notWant: []string{
+				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAx",
+				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTpISUdITElHSFQ6YTAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwMw",
+				"row-middle",
+				"A9AAAA99A99AA",
+			},
+		},
+		{
+			name: "ASIN が違う",
+			book: domain.Book{ID: "AAAAAAAAA2", ASIN: "AAAAAAAAA2"},
+			pages: map[string]fakeHighlightsPage{
+				"": {fixture: "highlights_next.html"},
+			},
+			notWant: []string{
+				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OTk6SElHSExJR0hUOmFhYWFhYTk5OTk5OQ",
+				"QTlBQUFBOTlBOTlBQTpBQUFBQUFBQUExOjk5OTk5OkhJR0hMSUdIVDphMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA2",
+				"A9AAAA99A99AA",
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fetch, _ := fakeHighlightsFetch(t, tt.pages, nil)
+			got, err := listHighlights(context.Background(), tt.book, fetch)
+			if got != nil {
+				t.Errorf("listHighlights() = %+v, want nil", got)
+			}
+			if err == nil {
+				t.Fatal("listHighlights() error = nil, want error")
+			}
+			if !errors.Is(err, domain.ErrMissingAnnotationID) {
+				t.Errorf("errors.Is(err, domain.ErrMissingAnnotationID) = %v, want %v", errors.Is(err, domain.ErrMissingAnnotationID), true)
+			}
+			for _, value := range tt.notWant {
+				if got := strings.Contains(err.Error(), value); got {
+					t.Errorf("strings.Contains(err.Error(), %q) = %v, want %v", value, got, false)
+				}
+			}
+		})
+	}
+}
+
+func TestListHighlightsFetchError(t *testing.T) {
+	const asin = "AAAAAAAAA1"
+	browserErr := exitcode.New(exitcode.Browser, errors.New("chrome crashed"))
+	plainErr := errors.New("fetch failed")
+	tests := []struct {
+		name     string
+		fetchErr error
+		wantCode int
+		wantIs   error
+	}{
+		{name: "Browser の種類を保つ", fetchErr: browserErr, wantCode: int(exitcode.Browser), wantIs: browserErr},
+		{name: "種類のないエラーは General", fetchErr: plainErr, wantCode: int(exitcode.General), wantIs: plainErr},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			book := domain.Book{ID: asin, ASIN: asin}
+			fetch, _ := fakeHighlightsFetch(t, map[string]fakeHighlightsPage{"": {err: tt.fetchErr}}, nil)
+			got, err := listHighlights(context.Background(), book, fetch)
+			if got != nil {
+				t.Errorf("listHighlights() = %+v, want nil", got)
+			}
+			if err == nil {
+				t.Fatal("listHighlights() error = nil, want error")
+			}
+			if got := exitcode.Code(err); got != tt.wantCode {
+				t.Errorf("exitcode.Code(err) = %d, want %d", got, tt.wantCode)
+			}
+			if !errors.Is(err, tt.wantIs) {
+				t.Errorf("errors.Is(err, tt.wantIs) = %v, want %v", errors.Is(err, tt.wantIs), true)
+			}
+		})
+	}
+}
+
+func TestListHighlightsDuplicateID(t *testing.T) {
+	const asin = "AAAAAAAAA1"
+	book := domain.Book{ID: asin, ASIN: asin}
+	fetch, _ := fakeHighlightsFetch(t, map[string]fakeHighlightsPage{
+		"":                    {fixture: "highlights_first.html"},
+		"aaaa9999BBBB%2Baaaa": {fixture: "highlights_empty_text.html"},
+	}, nil)
+	got, err := listHighlights(context.Background(), book, fetch)
+	if got != nil {
+		t.Errorf("listHighlights() = %+v, want nil", got)
+	}
+	if err == nil {
+		t.Fatal("listHighlights() error = nil, want error")
+	}
+	if !errors.Is(err, errHighlightIDDuplicated) {
+		t.Errorf("errors.Is(err, errHighlightIDDuplicated) = %v, want %v", errors.Is(err, errHighlightIDDuplicated), true)
 	}
 }
 
