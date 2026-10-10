@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -54,10 +55,15 @@ func captureProcessOutput(t *testing.T, f func()) (stdout, stderr string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	origOut, origErr := os.Stdout, os.Stderr
+	// 標準 logger は起動時の os.Stderr を持ち続けるので、出力先も差し替える
+	origOut, origErr, origLog := os.Stdout, os.Stderr, log.Writer()
 	os.Stdout, os.Stderr = outFile, errFile
+	log.SetOutput(errFile)
 	func() {
-		defer func() { os.Stdout, os.Stderr = origOut, origErr }()
+		defer func() {
+			os.Stdout, os.Stderr = origOut, origErr
+			log.SetOutput(origLog)
+		}()
 		f()
 	}()
 	for _, file := range []*os.File{outFile, errFile} {
