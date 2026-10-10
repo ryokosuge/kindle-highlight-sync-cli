@@ -1,6 +1,7 @@
 package destination
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
@@ -287,19 +288,14 @@ func TestBookIndexMatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := NewBookIndex(tt.pages, tt.hasAuthorMapping).Match(tt.book)
 			if got.Status != tt.wantStatus {
-				t.Errorf("Status = %q, want %q", got.Status, tt.wantStatus)
+				t.Errorf("Match().Status = %q, want %q", got.Status, tt.wantStatus)
 			}
-			if tt.wantID == "" {
-				if got.Book != nil {
-					t.Errorf("Book = %+v, want nil", *got.Book)
-				}
-				return
+			var wantBook *RemoteBook
+			if tt.wantID != "" {
+				wantBook = &RemoteBook{ID: tt.wantID}
 			}
-			if got.Book == nil {
-				t.Fatalf("Book = nil, want ID %q", tt.wantID)
-			}
-			if got.Book.ID != tt.wantID {
-				t.Errorf("Book.ID = %q, want %q", got.Book.ID, tt.wantID)
+			if !reflect.DeepEqual(got.Book, wantBook) {
+				t.Errorf("Match().Book = %+v, want %+v", got.Book, wantBook)
 			}
 		})
 	}
