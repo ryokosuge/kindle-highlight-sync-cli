@@ -46,6 +46,27 @@ func TestParseHighlightsPage(t *testing.T) {
 			},
 		},
 		{
+			name:    "続きの印に value 属性の無いコンテナのある 1 ページ",
+			fixture: "highlights_next_token_no_value.html",
+			want: HighlightsPage{
+				Entries: []HighlightEntry{
+					{RawID: idHighlight1, Text: "合成の本文 1", Note: "合成の Note 1", Location: "99"},
+				},
+				ContentLimitState: "aaaa9999AAAA%2Baaaa",
+			},
+		},
+		{
+			name:    "続きの印に value 属性の無いコンテナの無い最後のページ",
+			fixture: "highlights_last_no_value.html",
+			want: HighlightsPage{
+				Entries: []HighlightEntry{
+					{RawID: idHighlight3, Text: "合成の本文 3", Location: "9999"},
+					{RawID: idHighlight4, Text: "合成の本文 4", Note: "合成の Note 4", Location: "99999"},
+				},
+				ContentLimitState: "aaaa9999AAAA%2Baaaa",
+			},
+		},
+		{
 			name:    "Note だけの Highlight",
 			fixture: "highlights_note_only.html",
 			want: HighlightsPage{
@@ -114,14 +135,6 @@ func TestParseHighlightsPageError(t *testing.T) {
 			name:      "続きの token の input が無い",
 			html:      string(readFixture(t, "highlights_no_next_token.html")),
 			want:      "source: highlights page: highlights frame is unreadable: next page token input is missing: unexpected notebook structure",
-			wantCode:  7,
-			wantFrame: true,
-			notWant:   []string{text, note, "<input"},
-		},
-		{
-			name:      "続きの token の input に value 属性が無い",
-			html:      string(readFixture(t, "highlights_next_token_no_value.html")),
-			want:      "source: highlights page: highlights frame is unreadable: next page token input has no value attribute: unexpected notebook structure",
 			wantCode:  7,
 			wantFrame: true,
 			notWant:   []string{text, note, "<input"},
