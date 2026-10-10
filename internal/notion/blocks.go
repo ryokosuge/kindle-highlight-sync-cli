@@ -141,10 +141,10 @@ func readBlock(raw json.RawMessage, at string) (Block, error) {
 	if !ok {
 		return block, nil
 	}
-	var typeObject struct {
+	var typeObject *struct {
 		RichText json.RawMessage `json:"rich_text"`
 	}
-	if err := json.Unmarshal(typeRaw, &typeObject); err != nil {
+	if err := json.Unmarshal(typeRaw, &typeObject); err != nil || typeObject == nil {
 		return Block{}, fmt.Errorf("%s.%s must be an object", at, *result.Type)
 	}
 	if typeObject.RichText == nil {
