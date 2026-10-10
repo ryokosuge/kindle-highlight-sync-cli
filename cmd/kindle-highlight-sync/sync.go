@@ -31,8 +31,8 @@ var checkAuth = func(ctx context.Context, b browser) error {
 	return nil
 }
 
-// syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得する。
-// テストは差し替えて先発を止めておく。後続の Epic が Highlight の取得と Notion への同期をここに足す。
+// syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得する。
+// テストは差し替えて先発を止めておく。後続の Epic が Notion への同期をここに足す。
 var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// Open に渡す ctx にタイムアウトを付けると Chrome ごと止まるので、Notebook を開く action だけに付ける
 	b, err := openBrowser(ctx, source.Options{
@@ -62,9 +62,16 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 		// 認証切れでないのに届かなかったときは成功扱いにしない
 		return fmt.Errorf("sync: %w", source.ErrNotebookNotReached)
 	}
-	// 全ページを辿る取得には Notebook を開く待ちの期限を付けない。取得した Book はまだ使わない
-	if _, err := b.ListBooks(ctx); err != nil {
+	// 全ページを辿る取得には Notebook を開く待ちの期限を付けない
+	books, err := b.ListBooks(ctx)
+	if err != nil {
 		return err
+	}
+	// 取得した Highlight はまだ使わない。1 冊でも失敗したらその時点で種類を変えずに返す
+	for _, book := range books {
+		if _, err := b.ListHighlights(ctx, book); err != nil {
+			return err
+		}
 	}
 	return nil
 }

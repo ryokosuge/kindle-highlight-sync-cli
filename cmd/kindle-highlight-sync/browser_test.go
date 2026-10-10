@@ -24,7 +24,11 @@ type fakeBrowser struct {
 	listErr      error
 	listCalled   int
 	listDeadline time.Time
-	calls        []string // 呼ばれたメソッドの順
+	highlights   map[string][]domain.Highlight // Book.ID ごとに ListHighlights が返す
+	highlightErr map[string]error              // Book.ID ごとに ListHighlights が返す
+	hlBooks      []domain.Book                 // ListHighlights に渡った Book の順
+	hlDeadlines  []time.Time                   // ListHighlights に渡った ctx の期限（無ければゼロ値）
+	calls        []string                      // 呼ばれたメソッドの順
 
 	openDeadline time.Time // OpenNotebook に渡った ctx の期限（無ければゼロ値）
 	openCalledAt time.Time
@@ -51,6 +55,14 @@ func (f *fakeBrowser) ListBooks(ctx context.Context) ([]domain.Book, error) {
 	f.listCalled++
 	f.listDeadline, _ = ctx.Deadline()
 	return f.books, f.listErr
+}
+
+func (f *fakeBrowser) ListHighlights(ctx context.Context, book domain.Book) ([]domain.Highlight, error) {
+	f.calls = append(f.calls, "ListHighlights")
+	f.hlBooks = append(f.hlBooks, book)
+	d, _ := ctx.Deadline()
+	f.hlDeadlines = append(f.hlDeadlines, d)
+	return f.highlights[book.ID], f.highlightErr[book.ID]
 }
 
 func (f *fakeBrowser) WaitNotebook(ctx context.Context) error {
