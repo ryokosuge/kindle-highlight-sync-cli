@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -32,6 +33,39 @@ func planCells(t *testing.T, out string) [][]string {
 		rows = append(rows, cellSeparator.Split(line, -1))
 	}
 	return rows
+}
+
+func assertAppendCountSum(t *testing.T, cells [][]string) {
+	t.Helper()
+	sum := 0
+	for i, row := range cells[1:] {
+		if len(row) == 0 {
+			break
+		}
+		if len(row) < 5 {
+			t.Fatalf("Book row %d cells = %d, want at least 5", i+1, len(row))
+		}
+		if row[4] == "-" {
+			continue
+		}
+		count, err := strconv.Atoi(row[4])
+		if err != nil {
+			t.Fatalf("strconv.Atoi(%q) error = %v, want nil", row[4], err)
+		}
+		sum += count
+	}
+	for _, row := range cells {
+		if len(row) > 0 && row[0] == "Highlights to append" {
+			if len(row) < 2 {
+				t.Fatalf("Highlights to append summary cells = %d, want at least 2", len(row))
+			}
+			if row[1] != strconv.Itoa(sum) {
+				t.Errorf("sum of Book rows' Highlights to append = %d, want %s (summary)", sum, row[1])
+			}
+			return
+		}
+	}
+	t.Fatal(`summary row "Highlights to append" not found`)
 }
 
 type failingWriter struct {
@@ -85,11 +119,11 @@ func TestWritePlan(t *testing.T) {
 				},
 			},
 			want: [][]string{
-				{"Kindle Book", "Match Status", "Matched Notion Page", "Action"},
-				{"吾輩は猫である", "exact", "page-1", "append"},
-				{"Go Programming", "adoptable", "page-2", "adopt + append"},
-				{"新しい本", "none", "-", "create + append"},
-				{"曖昧な本", "ambiguous", "-", "skip"},
+				{"Kindle Book", "Match Status", "Matched Notion Page", "Action", "Highlights to append"},
+				{"吾輩は猫である", "exact", "page-1", "append", "2"},
+				{"Go Programming", "adoptable", "page-2", "adopt + append", "1"},
+				{"新しい本", "none", "-", "create + append", "3"},
+				{"曖昧な本", "ambiguous", "-", "skip", "-"},
 				{},
 				{"Exact matches", "1"},
 				{"Adoptable matches", "1"},
@@ -102,7 +136,7 @@ func TestWritePlan(t *testing.T) {
 			name: "0 冊なら summary はすべて 0",
 			plan: syncengine.Plan{},
 			want: [][]string{
-				{"Kindle Book", "Match Status", "Matched Notion Page", "Action"},
+				{"Kindle Book", "Match Status", "Matched Notion Page", "Action", "Highlights to append"},
 				{},
 				{"Exact matches", "0"},
 				{"Adoptable matches", "0"},
@@ -123,6 +157,7 @@ func TestWritePlan(t *testing.T) {
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("planCells(writePlan()) = %v, want %v", got, tt.want)
 			}
+			assertAppendCountSum(t, got)
 		})
 	}
 }

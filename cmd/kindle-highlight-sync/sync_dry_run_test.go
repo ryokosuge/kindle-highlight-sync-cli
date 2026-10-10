@@ -159,10 +159,10 @@ func TestSyncDryRun(t *testing.T) {
 		}
 		assertSyncSucceeded(t, code, stderr, filepath.Join(p.DataDir, "run.lock"))
 		want := [][]string{
-			{"Kindle Book", "Match Status", "Matched Notion Page", "Action"},
-			{dryRunBookExact.Title, "exact", "page-exact", "append"},
-			{dryRunBookNew.Title, "none", "-", "create + append"},
-			{dryRunBookAmbiguous.Title, "ambiguous", "-", "skip"},
+			{"Kindle Book", "Match Status", "Matched Notion Page", "Action", "Highlights to append"},
+			{dryRunBookExact.Title, "exact", "page-exact", "append", "1"},
+			{dryRunBookNew.Title, "none", "-", "create + append", "1"},
+			{dryRunBookAmbiguous.Title, "ambiguous", "-", "skip", "-"},
 			{},
 			{"Exact matches", "1"},
 			{"Adoptable matches", "0"},
@@ -170,9 +170,11 @@ func TestSyncDryRun(t *testing.T) {
 			{"Ambiguous", "1"},
 			{"Highlights to append", "2"}, // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
 		}
-		if got := planCells(t, stdout); !reflect.DeepEqual(got, want) {
+		got := planCells(t, stdout)
+		if !reflect.DeepEqual(got, want) {
 			t.Errorf("run(sync --dry-run) stdout cells = %q, want %q", got, want)
 		}
+		assertAppendCountSum(t, got)
 		// ambiguous の Book は Highlight を取りに行かず、ほかの Book も 1 回ずつしか取らない
 		if want := []domain.Book{dryRunBookExact, dryRunBookNew}; !slices.Equal(b.hlBooks, want) {
 			t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
@@ -199,7 +201,7 @@ func TestSyncDryRun(t *testing.T) {
 				{"Highlights to append", highlights},
 			}
 		}
-		header := []string{"Kindle Book", "Match Status", "Matched Notion Page", "Action"}
+		header := []string{"Kindle Book", "Match Status", "Matched Notion Page", "Action", "Highlights to append"}
 		tests := []struct {
 			name        string
 			books       []domain.Book
@@ -214,8 +216,8 @@ func TestSyncDryRun(t *testing.T) {
 				books: []domain.Book{dryRunBookExact, dryRunBookNoASIN, dryRunBookNew},
 				wantCells: append([][]string{
 					header,
-					{dryRunBookExact.Title, "exact", "page-exact", "append"},
-					{dryRunBookNew.Title, "none", "-", "create + append"},
+					{dryRunBookExact.Title, "exact", "page-exact", "append", "1"},
+					{dryRunBookNew.Title, "none", "-", "create + append", "1"},
 				}, summary("1", "1", "2")...), // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
 				wantHLBooks:  []domain.Book{dryRunBookExact, dryRunBookNew},
 				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
@@ -245,9 +247,11 @@ func TestSyncDryRun(t *testing.T) {
 				if stderr != tt.wantStderr {
 					t.Errorf("stderr = %q, want %q", stderr, tt.wantStderr)
 				}
-				if got := planCells(t, stdout); !reflect.DeepEqual(got, tt.wantCells) {
+				got := planCells(t, stdout)
+				if !reflect.DeepEqual(got, tt.wantCells) {
 					t.Errorf("run(sync --dry-run) stdout cells = %q, want %q", got, tt.wantCells)
 				}
+				assertAppendCountSum(t, got)
 				if !slices.Equal(b.hlBooks, tt.wantHLBooks) {
 					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, tt.wantHLBooks)
 				}
