@@ -10,7 +10,10 @@ import (
 
 type pageQuerier interface {
 	QueryDataSource(ctx context.Context, dataSourceID string) ([]notion.Page, error)
+	ListBlockChildren(ctx context.Context, blockID string) ([]notion.Block, error)
 }
+
+const quoteBlockType = "quote"
 
 // NotionDestination は Notion の Data Source を同期先とする Destination。同時に複数の goroutine から呼ばない。
 type NotionDestination struct {
@@ -37,6 +40,28 @@ func (d *NotionDestination) FindBook(ctx context.Context, book domain.Book) (Boo
 		d.index = NewBookIndex(indexedBooks(pages, d.notion.Mapping), d.notion.Mapping.Author != "")
 	}
 	return d.index.Match(book), nil
+}
+
+// ListHighlightIDs は Book のページの直下の子 block を全件取り、Sync Marker のある Quote Block（§21）を
+// Highlight ID で引ける map にして返す。Notion へは読み取りの要求しか送らない。
+// 子 block の取得に失敗したら途中までの map を返さず error（exitcode.Notion）をそのまま返す。
+func (d *NotionDestination) ListHighlightIDs(ctx context.Context, remote RemoteBook) (map[string]RemoteHighlight, error) {
+	blocks, err := d.client.ListBlockChildren(ctx, remote.ID)
+	if err != nil {
+		return nil, err
+	}
+	highlights := make(map[string]RemoteHighlight)
+	for _, b := range blocks {
+		if b.Type != quoteBlockType {
+			continue
+		}
+		id, ok := SyncMarkerID(b.Text)
+		if !ok {
+			continue
+		}
+		highlights[id] = RemoteHighlight{ID: b.ID, HighlightID: id}
+	}
+	return highlights, nil
 }
 
 // indexedBooks は各ページの Property を mapping の Property ID で読む。

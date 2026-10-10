@@ -12,6 +12,12 @@ type RemoteBook struct {
 	ID string
 }
 
+// RemoteHighlight は同期先の Highlight。MVP では ID は Highlight を表す親 Quote Block の Notion Block ID（§8）。
+type RemoteHighlight struct {
+	ID          string
+	HighlightID string
+}
+
 type BookMatchStatus string
 
 const (
@@ -27,7 +33,8 @@ type BookMatch struct {
 	Book   *RemoteBook
 }
 
-// Destination は §6.2 のうち、照合だけを持つ。書き込みの method は Epic #7 で足す。
+// Destination は §6.2 のうち、照合と Highlight ID の一覧だけを持つ。書き込みの method は Epic #7 で足す。
 type Destination interface {
 	FindBook(ctx context.Context, book domain.Book) (BookMatch, error)
+	ListHighlightIDs(ctx context.Context, remote RemoteBook) (map[string]RemoteHighlight, error)
 }

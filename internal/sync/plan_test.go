@@ -26,6 +26,10 @@ func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destina
 	return f.matches[book.ID], nil
 }
 
+func (f *fakeDestination) ListHighlightIDs(_ context.Context, _ destination.RemoteBook) (map[string]destination.RemoteHighlight, error) {
+	return nil, nil
+}
+
 type fakeSource struct {
 	highlights map[string][]domain.Highlight
 	errs       map[string]error

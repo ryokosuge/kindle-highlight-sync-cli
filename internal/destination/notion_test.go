@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -18,6 +19,8 @@ import (
 const (
 	testDataSourceID   = "ds-1"
 	testQueryPath      = "/v1/data_sources/ds-1/query"
+	testPageID         = "page-84"
+	testBlocksPath     = "/v1/blocks/page-84/children"
 	titlePropertyID    = "title"
 	kindleIDPropertyID = "kid%3A"
 	authorPropertyID   = "aut%3B"
@@ -75,6 +78,10 @@ func pageJSON(id string, properties ...string) string {
 	return fmt.Sprintf(`{"object":"page","id":%q,"properties":{%s}}`, id, strings.Join(properties, ","))
 }
 
+func blockJSON(id, typ, text string) string {
+	return fmt.Sprintf(`{"object":"block","id":%q,"type":%q,%q:{"rich_text":[{"plain_text":%q}]}}`, id, typ, typ, text)
+}
+
 // queryReply は 1 回分の Query a data source の応答。nextCursor が空なら最後のページ。
 func queryReply(nextCursor string, pages ...string) notionReply {
 	cursor, hasMore := "null", false
@@ -82,6 +89,18 @@ func queryReply(nextCursor string, pages ...string) notionReply {
 		cursor, hasMore = fmt.Sprintf("%q", nextCursor), true
 	}
 	return notionReply{body: fmt.Sprintf(`{"object":"list","results":[%s],"has_more":%t,"next_cursor":%s}`, strings.Join(pages, ","), hasMore, cursor)}
+}
+
+func assertBlockRequests(t *testing.T, got []string, want int) {
+	t.Helper()
+	if len(got) != want {
+		t.Fatalf("requests = %v, want %d requests", got, want)
+	}
+	for i, r := range got {
+		if r != "GET "+testBlocksPath {
+			t.Errorf("requests[%d] = %q, want %q", i, r, "GET "+testBlocksPath)
+		}
+	}
 }
 
 func bookPage(id, kindleID, asin, title, author string) string {
@@ -282,6 +301,97 @@ func TestNotionDestinationFindBookFailure(t *testing.T) {
 			}
 			assertMatch(t, got, "exact", "page-exact")
 			assertRequests(t, requests(), len(replies))
+		})
+	}
+}
+
+func TestNotionDestinationListHighlightIDs(t *testing.T) {
+	tests := []struct {
+		name    string
+		replies []notionReply
+		want    map[string]RemoteHighlight
+	}{
+		{
+			name: "Sync Marker のある Quote Block だけを集める",
+			replies: []notionReply{queryReply("",
+				blockJSON("q-1", "quote", "本文\nLocation 10 · khs:a-1"),
+				blockJSON("p-1", "paragraph", "khs:a-para"),
+				blockJSON("h-1", "heading_1", "khs:a-heading"),
+				blockJSON("q-none", "quote", "Marker の無い quote"),
+				blockJSON("q-2", "quote", "khs:a-x の後に khs:"),
+			)},
+			want: map[string]RemoteHighlight{
+				"a-1": {ID: "q-1", HighlightID: "a-1"},
+				"a-x": {ID: "q-2", HighlightID: "a-x"},
+			},
+		},
+		{
+			name: "子 block が 2 回の応答に分かれても後ろの応答の Quote Block を集める",
+			replies: []notionReply{
+				queryReply("cursor-1",
+					blockJSON("q-1", "quote", "khs:a-1"),
+					blockJSON("p-1", "paragraph", "paragraph"),
+				),
+				queryReply("", blockJSON("q-2", "quote", "本文 · khs:a-2")),
+			},
+			want: map[string]RemoteHighlight{
+				"a-1": {ID: "q-1", HighlightID: "a-1"},
+				"a-2": {ID: "q-2", HighlightID: "a-2"},
+			},
+		},
+		{
+			name:    "Quote Block が無ければ空の map",
+			replies: []notionReply{queryReply("", blockJSON("p-1", "paragraph", "khs:a-1"))},
+			want:    map[string]RemoteHighlight{},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, requests := newNotionTestClient(t, tt.replies...)
+			d := NewNotionDestination(client, config.Notion{DataSourceID: testDataSourceID, Mapping: fullMapping})
+
+			got, err := d.ListHighlightIDs(context.Background(), RemoteBook{ID: testPageID})
+			if err != nil {
+				t.Fatalf("ListHighlightIDs() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ListHighlightIDs() = %+v, want %+v", got, tt.want)
+			}
+			assertBlockRequests(t, requests(), len(tt.replies))
+		})
+	}
+}
+
+func TestNotionDestinationListHighlightIDsFailure(t *testing.T) {
+	tests := []struct {
+		name    string
+		replies []notionReply
+	}{
+		{
+			name:    "最初の要求が失敗する",
+			replies: []notionReply{{status: http.StatusBadRequest, body: notionErrorBody}},
+		},
+		{
+			name: "途中の応答の要求が失敗する",
+			replies: []notionReply{
+				queryReply("cursor-1", blockJSON("q-1", "quote", "khs:a-1")),
+				{status: http.StatusBadRequest, body: notionErrorBody},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, requests := newNotionTestClient(t, tt.replies...)
+			d := NewNotionDestination(client, config.Notion{DataSourceID: testDataSourceID, Mapping: fullMapping})
+
+			got, err := d.ListHighlightIDs(context.Background(), RemoteBook{ID: testPageID})
+			if got := exitcode.Code(err); got != 4 {
+				t.Fatalf("exitcode.Code(err) = %d, want 4 (err = %v)", got, err)
+			}
+			if got != nil {
+				t.Errorf("ListHighlightIDs() = %+v, want nil", got)
+			}
+			assertBlockRequests(t, requests(), len(tt.replies))
 		})
 	}
 }
