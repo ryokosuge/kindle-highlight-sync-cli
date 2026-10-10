@@ -35,18 +35,19 @@ var (
 // LibraryPage は Notebook の Book 一覧 1 ページ分の解析結果。
 type LibraryPage struct {
 	Books     []domain.Book
-	NextToken string // 空なら最後のページ
+	NextToken string // 空なら最後のページ（value 属性の無い input も空として読む）
 }
 
 // ParseLibraryPage は Notebook の Book 一覧 1 ページ目の HTML を解析する。
-// root（#kp-notebook-library）と続きの印が無ければ SourceFormat の種類のエラーを返す。
+// root（#kp-notebook-library）と続きの印の input が無ければ SourceFormat の種類のエラーを返す。
+// 続きの印の value が空、または value 属性が無ければ最後のページとして NextToken を空にする。
 // 2 ページ目以降は root を持たない断片なので ParseLibraryFragment を使う（仕様書 §18.4）。
 func ParseLibraryPage(html []byte) (LibraryPage, error) {
 	return parseLibrary(html, true)
 }
 
 // ParseLibraryFragment は Notebook の Book 一覧 2 ページ目以降の断片 HTML を解析する。
-// 続きの印が無ければ SourceFormat の種類のエラーを返す。
+// 続きの印の input が無ければ SourceFormat の種類のエラーを返す。value が空、または value 属性が無ければ最後のページ。
 func ParseLibraryFragment(html []byte) (LibraryPage, error) {
 	return parseLibrary(html, false)
 }
@@ -66,12 +67,8 @@ func parseLibrary(html []byte, wantRoot bool) (LibraryPage, error) {
 		return LibraryPage{}, fmt.Errorf("source: library page: %w", newFormatError("next page token input is missing"))
 	}
 
-	token, ok := next.Attr("value")
-	if !ok {
-		return LibraryPage{}, fmt.Errorf("source: library page: %w", newFormatError("next page token input has no value attribute"))
-	}
-
-	page := LibraryPage{NextToken: token}
+	// value 属性の無い input も、value="" と同じく最後のページの印として読む（実機の Book 一覧の最後のページはこの形で返る）。
+	page := LibraryPage{NextToken: next.AttrOr("value", "")}
 	var parseErr error
 	doc.Find(librarySelectorBook).EachWithBreak(func(i int, s *goquery.Selection) bool {
 		book, err := parseLibraryBook(s)

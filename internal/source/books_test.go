@@ -98,6 +98,21 @@ func TestListBooks(t *testing.T) {
 			wantCalls: []string{"", "aaaa9999AAAA%2Baaaa9999%3D", "aaaa9999BBBB%2Baaaa9999%3D"},
 		},
 		{
+			name: "value 属性の無い続きの印で終わる 3 ページ",
+			pages: map[string]fakeLibraryPage{
+				"":                           {fixture: "library_first.html"},
+				"aaaa9999AAAA%2Baaaa9999%3D": {fixture: "library_next.html"},
+				"aaaa9999BBBB%2Baaaa9999%3D": {fixture: "library_last_no_value.html"},
+			},
+			want: []domain.Book{
+				{ID: "AAAAAAAAA1", ASIN: "AAAAAAAAA1", Title: "合成の書名 A", Author: "合成 著者 A", LastAnnotatedAt: date(2026, time.October, 8)},
+				{ID: "AAAAAAAAA2", ASIN: "AAAAAAAAA2", Title: "合成の書名 B", Author: "合成 著者 B", LastAnnotatedAt: date(2025, time.December, 31)},
+				{ID: "AAAAAAAAA3", ASIN: "AAAAAAAAA3", Title: "合成の書名 C", Author: "合成 著者 C", LastAnnotatedAt: date(2026, time.March, 1)},
+				{ID: "AAAAAAAAA4", ASIN: "AAAAAAAAA4", Title: "合成の書名 D", Author: "合成 著者 D"},
+			},
+			wantCalls: []string{"", "aaaa9999AAAA%2Baaaa9999%3D", "aaaa9999BBBB%2Baaaa9999%3D"},
+		},
+		{
 			name: "Book 0 件の途中ページでも止まらない",
 			pages: map[string]fakeLibraryPage{
 				"":                           {fixture: "library_first.html"},
