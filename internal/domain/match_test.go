@@ -24,6 +24,26 @@ func TestNormalizeForMatch(t *testing.T) {
 			want: "thegoprogramminglanguage",
 		},
 		{
+			name: "ギリシャ文字の語末の大文字シグマは小文字の語末形と同じ値になる",
+			in:   "ΟΣ",
+			want: "ος",
+		},
+		{
+			name: "ギリシャ文字の語末形の小文字シグマはそのまま",
+			in:   "ος",
+			want: "ος",
+		},
+		{
+			name: "ギリシャ文字の大文字だけの単語は先頭だけ大文字の単語と同じ値になる",
+			in:   "ΟΔΥΣΣΕΥΣ",
+			want: "οδυσσευς",
+		},
+		{
+			name: "ギリシャ文字の先頭だけ大文字の単語は小文字になる",
+			in:   "Οδυσσευς",
+			want: "οδυσσευς",
+		},
+		{
 			name: "前後の半角 space を除く",
 			in:   "  Go  ",
 			want: "go",
