@@ -47,6 +47,8 @@ type highlightLister interface {
 }
 
 // BuildPlan は書き込まずに、各 Book の照合の結果と追記する Highlight の数を集める（仕様書 §63）。
+// Notion にページがある Book（exact / adoptable）は、Sync Marker で既知の Highlight ID を除いた数だけを数える（§26 の appendIDs = sourceIDs - knownIDs。
+// この Epic では State を読まないので knownIDs は remoteIDs だけ）。none はページが無く、ambiguous は Highlight を取らないので、どちらも Notion の block を読まない。
 func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, dst destination.Destination) (Plan, error) {
 	p := Plan{Books: make([]BookPlan, 0, len(books))}
 	for _, b := range books {
@@ -55,12 +57,15 @@ func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, ds
 			return Plan{}, err
 		}
 		bp := BookPlan{Book: b, Match: m}
+		var hasPage bool
 		switch m.Status {
 		case destination.BookMatchExact:
 			bp.Action = ActionAppend
+			hasPage = true
 			p.Summary.ExactMatches++
 		case destination.BookMatchAdoptable:
 			bp.Action = ActionAdoptAndAppend
+			hasPage = true
 			p.Summary.AdoptableMatches++
 		case destination.BookMatchNone:
 			bp.Action = ActionCreateAndAppend
@@ -70,14 +75,31 @@ func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, ds
 			p.Summary.Ambiguous++
 		}
 		if bp.Action != ActionSkip {
+			var known map[string]destination.RemoteHighlight
+			if hasPage {
+				if known, err = dst.ListHighlightIDs(ctx, *m.Book); err != nil {
+					return Plan{}, err
+				}
+			}
 			hs, err := src.ListHighlights(ctx, b)
 			if err != nil {
 				return Plan{}, err
 			}
-			bp.HighlightsToAppend = len(hs)
+			bp.HighlightsToAppend = countUnknown(hs, known)
 			p.Summary.HighlightsToAppend += bp.HighlightsToAppend
 		}
 		p.Books = append(p.Books, bp)
 	}
 	return p, nil
+}
+
+// countUnknown は known に Highlight ID が無い Highlight の数。known にだけある ID は数に影響しない。
+func countUnknown(hs []domain.Highlight, known map[string]destination.RemoteHighlight) int {
+	n := 0
+	for _, h := range hs {
+		if _, ok := known[h.ID]; !ok {
+			n++
+		}
+	}
+	return n
 }

@@ -40,13 +40,20 @@ type recordedRequest struct {
 // newNotionServer は受けた要求を記録し、body をそのまま返す Notion の代役と、記録を返す関数を作る。
 func newNotionServer(t *testing.T, body string) (*httptest.Server, func() []recordedRequest) {
 	t.Helper()
+	return newNotionServerFunc(t, func(string) string { return body })
+}
+
+// newNotionServerFunc は受けた要求を記録し、path ごとに reply が返す body を返す Notion の代役と、記録を返す関数を作る。
+func newNotionServerFunc(t *testing.T, reply func(path string) string) (*httptest.Server, func() []recordedRequest) {
+	t.Helper()
 	var mu sync.Mutex
 	var requests []recordedRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.EscapedPath()
 		mu.Lock()
-		requests = append(requests, recordedRequest{method: r.Method, path: r.URL.EscapedPath(), authorization: r.Header.Get("Authorization")})
+		requests = append(requests, recordedRequest{method: r.Method, path: path, authorization: r.Header.Get("Authorization")})
 		mu.Unlock()
-		_, _ = w.Write([]byte(body))
+		_, _ = w.Write([]byte(reply(path)))
 	}))
 	t.Cleanup(srv.Close)
 	return srv, func() []recordedRequest {
