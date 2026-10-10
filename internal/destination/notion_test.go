@@ -340,6 +340,16 @@ func TestNotionDestinationListHighlightIDs(t *testing.T) {
 			},
 		},
 		{
+			name: "同じ Highlight ID の Quote Block が 2 つあればページ順で最初の block を採る",
+			replies: []notionReply{
+				queryReply("cursor-1", blockJSON("q-first", "quote", "khs:a-1")),
+				queryReply("", blockJSON("q-second", "quote", "本文 · khs:a-1")),
+			},
+			want: map[string]RemoteHighlight{
+				"a-1": {ID: "q-first", HighlightID: "a-1"},
+			},
+		},
+		{
 			name:    "Quote Block が無ければ空の map",
 			replies: []notionReply{queryReply("", blockJSON("p-1", "paragraph", "khs:a-1"))},
 			want:    map[string]RemoteHighlight{},

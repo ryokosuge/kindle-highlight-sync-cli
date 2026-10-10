@@ -44,6 +44,7 @@ func (d *NotionDestination) FindBook(ctx context.Context, book domain.Book) (Boo
 
 // ListHighlightIDs は Book のページの直下の子 block を全件取り、Sync Marker のある Quote Block（§21）を
 // Highlight ID で引ける map にして返す。Notion へは読み取りの要求しか送らない。
+// 同じ Highlight ID の Quote Block が複数あればページ順で最初の block を採る。
 // 子 block の取得に失敗したら途中までの map を返さず error（exitcode.Notion）をそのまま返す。
 func (d *NotionDestination) ListHighlightIDs(ctx context.Context, remote RemoteBook) (map[string]RemoteHighlight, error) {
 	blocks, err := d.client.ListBlockChildren(ctx, remote.ID)
@@ -57,6 +58,9 @@ func (d *NotionDestination) ListHighlightIDs(ctx context.Context, remote RemoteB
 		}
 		id, ok := SyncMarkerID(b.Text)
 		if !ok {
+			continue
+		}
+		if _, dup := highlights[id]; dup {
 			continue
 		}
 		highlights[id] = RemoteHighlight{ID: b.ID, HighlightID: id}
