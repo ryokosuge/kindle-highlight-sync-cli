@@ -139,10 +139,7 @@ func TestListBlockChildren(t *testing.T) {
 				{"type":"text","annotations":{"bold":true},"plain_text":"Work"},
 				{"type":"mention","mention":{"type":"date"},"plain_text":" 2026"}
 			],"color":"default"}},
-			{"object":"block","id":"b-2","type":"paragraph","has_children":false,"paragraph":{"rich_text":[],"color":"default"}},
-			{"object":"block","id":"b-3","type":"divider","has_children":false,"divider":{}},
-			{"object":"block","id":"b-4","type":"child_page","has_children":false,"child_page":{"title":"Sub"}},
-			{"object":"block","id":"b-5","type":"unsupported","has_children":false,"unsupported":{}}
+			{"object":"block","id":"b-2","type":"paragraph","has_children":false,"paragraph":{"rich_text":[],"color":"default"}}
 		],"has_more":false,"next_cursor":null}`})
 
 		got, err := client.ListBlockChildren(context.Background(), "page-id")
@@ -152,9 +149,29 @@ func TestListBlockChildren(t *testing.T) {
 		want := []Block{
 			{ID: "b-1", Type: "quote", Text: "Deep Work 2026"},
 			{ID: "b-2", Type: "paragraph", Text: ""},
-			{ID: "b-3", Type: "divider", Text: ""},
-			{ID: "b-4", Type: "child_page", Text: ""},
-			{ID: "b-5", Type: "unsupported", Text: ""},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("ListBlockChildren() = %#v, want %#v", got, want)
+		}
+	})
+
+	t.Run("rich_text を持たない種類は Text を空にして受け入れる", func(t *testing.T) {
+		client, _ := newBlocksTestClient(t, queryReply{body: `{"object":"list","type":"block","block":{},"results":[
+			{"object":"block","id":"b-1","type":"divider","has_children":false,"divider":{}},
+			{"object":"block","id":"b-2","type":"child_page","has_children":false,"child_page":{"title":"Sub"}},
+			{"object":"block","id":"b-3","type":"unsupported","has_children":false,"unsupported":{}},
+			{"object":"block","id":"b-4","type":"future_kind","has_children":false,"future_kind":{}}
+		],"has_more":false,"next_cursor":null}`})
+
+		got, err := client.ListBlockChildren(context.Background(), "page-id")
+		if err != nil {
+			t.Fatalf("ListBlockChildren() error = %v", err)
+		}
+		want := []Block{
+			{ID: "b-1", Type: "divider", Text: ""},
+			{ID: "b-2", Type: "child_page", Text: ""},
+			{ID: "b-3", Type: "unsupported", Text: ""},
+			{ID: "b-4", Type: "future_kind", Text: ""},
 		}
 		if !reflect.DeepEqual(got, want) {
 			t.Errorf("ListBlockChildren() = %#v, want %#v", got, want)
@@ -292,6 +309,7 @@ func TestListBlockChildrenInvalidResponse(t *testing.T) {
 		{name: "type のオブジェクトがオブジェクトでない", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":"x"}],"has_more":false,"next_cursor":null}`, want: "results[0].quote must be an object"},
 		{name: "type のオブジェクトが null", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":null}],"has_more":false,"next_cursor":null}`, want: "results[0].quote must be an object"},
 		{name: "rich_text が null", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":{"rich_text":null}}],"has_more":false,"next_cursor":null}`, want: "results[0].quote.rich_text is required"},
+		{name: "本文を持つ種類の rich_text がない", body: `{"object":"list","results":[{"object":"block","id":"b","type":"paragraph","paragraph":{}}],"has_more":false,"next_cursor":null}`, want: "results[0].paragraph.rich_text is required"},
 		{name: "rich_text が配列でない", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":{"rich_text":"x"}}],"has_more":false,"next_cursor":null}`, want: "results[0].quote.rich_text must be an array"},
 		{name: "rich_text の plain_text がない", body: `{"object":"list","results":[{"object":"block","id":"b","type":"quote","quote":{"rich_text":[{"plain_text":"a"},{"type":"text"}]}}],"has_more":false,"next_cursor":null}`, want: "results[0].quote.rich_text[1].plain_text is required"},
 	}

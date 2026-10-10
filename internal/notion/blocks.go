@@ -102,8 +102,27 @@ func (c *Client) readBlockChildrenResponse(path string, response *blockChildrenR
 	return blocks, *nextCursor, nil
 }
 
+// richTextBlockTypes は Notion の block type objects（https://developers.notion.com/reference/block）で <type> に rich_text を持つと書かれている種類。
+var richTextBlockTypes = map[string]struct{}{
+	"bulleted_list_item": {},
+	"callout":            {},
+	"code":               {},
+	"heading_1":          {},
+	"heading_2":          {},
+	"heading_3":          {},
+	"heading_4":          {},
+	"numbered_list_item": {},
+	"paragraph":          {},
+	"quote":              {},
+	"template":           {},
+	"to_do":              {},
+	"toggle":             {},
+}
+
 // readBlock は応答の block を検証し、ID / Type / Text を取り出す。
-// <type> のキーが無い、または値が object でない応答は壊れた応答として拒否する。<type> が rich_text を持たない種類（divider など）は Text を空にする。
+// <type> のキーが無い、または値が object でない応答は壊れた応答として拒否する。
+// richTextBlockTypes に含まれる種類は rich_text が無い応答も拒否する。それ以外の種類
+// （一覧で判定できない未知の種類を含む）は rich_text が無くても拒否せず Text を空にする。
 func readBlock(raw json.RawMessage, at string) (Block, error) {
 	var result struct {
 		Object *string `json:"object"`
@@ -148,6 +167,9 @@ func readBlock(raw json.RawMessage, at string) (Block, error) {
 		return Block{}, fmt.Errorf("%s.%s must be an object", at, *result.Type)
 	}
 	if typeObject.RichText == nil {
+		if _, ok := richTextBlockTypes[*result.Type]; ok {
+			return Block{}, fmt.Errorf("%s.%s.rich_text is required", at, *result.Type)
+		}
 		return block, nil
 	}
 	var items *[]richTextResponse
