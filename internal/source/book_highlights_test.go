@@ -122,6 +122,18 @@ func TestListHighlightEntries(t *testing.T) {
 			},
 		},
 		{
+			name: "2 ページ目の続きの印に value 属性が無い",
+			pages: map[string]fakeHighlightsPage{
+				"":                    {fixture: "highlights_first.html"},
+				"aaaa9999BBBB%2Baaaa": {fixture: "highlights_last_no_value.html"},
+			},
+			want: []HighlightEntry{threePages[0], threePages[1], threePages[3], threePages[4]},
+			wantCalls: []highlightsCall{
+				{asin: asin},
+				{asin: asin, token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
+			},
+		},
+		{
 			name: "後のページの ContentLimitState で更新する",
 			pages: map[string]fakeHighlightsPage{
 				"":                    {fixture: "highlights_first.html"},
@@ -403,22 +415,6 @@ func TestListHighlightEntriesError(t *testing.T) {
 				"aaaa9999BBBB%2Baaaa": {html: "<p>broken</p>"},
 			},
 			want:      "source: list highlights AAAAAAAAA1: page 2: source: highlights page: highlights frame is unreadable: next page token input is missing: unexpected notebook structure",
-			wantIs:    ErrSourceFormat,
-			wantCode:  7,
-			wantFrame: true,
-			wantCalls: []highlightsCall{
-				{asin: "AAAAAAAAA1"},
-				{asin: "AAAAAAAAA1", token: "aaaa9999BBBB%2Baaaa", contentLimitState: "aaaa9999AAAA%2Baaaa"},
-			},
-		},
-		{
-			name: "2 ページ目の続きの token の input に value 属性が無い",
-			asin: "AAAAAAAAA1",
-			pages: map[string]fakeHighlightsPage{
-				"":                    {fixture: "highlights_first.html"},
-				"aaaa9999BBBB%2Baaaa": {fixture: "highlights_next_token_no_value.html"},
-			},
-			want:      "source: list highlights AAAAAAAAA1: page 2: source: highlights page: highlights frame is unreadable: next page token input has no value attribute: unexpected notebook structure",
 			wantIs:    ErrSourceFormat,
 			wantCode:  7,
 			wantFrame: true,
