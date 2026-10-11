@@ -33,12 +33,11 @@ type BookFailure struct {
 
 // ApplyResult は ApplyBooks の結果。各 slice は Book ID を入力の順に持ち、件数は len で取る。
 type ApplyResult struct {
-	Created []string                          // CreateBook でページを作った Book
-	Adopted []string                          // AdoptBook で既存ページを引き取った Book
-	Exact   []string                          // ページがあり何も書かなかった Book
-	Skipped []string                          // 照合が ambiguous で skip した Book（§51）
-	Failed  []BookFailure                     // 書き込みが Book 単位で失敗した Book（§72）
-	Remote  map[string]destination.RemoteBook // Book ID ごとの同期先のページ（created / adopted / exact の Book だけ）
+	Created []string      // CreateBook でページを作った Book
+	Adopted []string      // AdoptBook で既存ページを引き取った Book
+	Exact   []string      // ページがあり何も書かなかった Book
+	Skipped []string      // 照合が ambiguous で skip した Book（§51）
+	Failed  []BookFailure // 書き込みが Book 単位で失敗した Book（§72）
 }
 
 // PartialFailure は skip か失敗が 1 件以上あれば exitcode.PartialFailure（8）の error を返し、無ければ nil を返す（§72）。
