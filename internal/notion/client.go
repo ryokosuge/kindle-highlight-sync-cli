@@ -136,7 +136,17 @@ func (c *Client) get(ctx context.Context, path string, v any) error {
 }
 
 // do は Notion への要求の送信と応答の読み取りを 1 か所にまとめる。body が nil なら本文を送らない。
+// 429 / 529 は retryPolicy に従って再送する（§29 の Read / Query / Idempotent Property Update）。
 func (c *Client) do(ctx context.Context, method, path string, body, v any) error {
+	return c.request(ctx, method, path, body, v, true)
+}
+
+// doOnce は do と同じ送り方で要求を 1 回だけ送り、429 / 529 でも再送しない（§29 の Highlight Append）。
+func (c *Client) doOnce(ctx context.Context, method, path string, body, v any) error {
+	return c.request(ctx, method, path, body, v, false)
+}
+
+func (c *Client) request(ctx context.Context, method, path string, body, v any, retry bool) error {
 	var encoded []byte
 	if body != nil {
 		var err error
@@ -159,7 +169,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, v any) error
 		}
 
 		statusErr := statusError(resp.StatusCode, respBody)
-		if !retryable(resp.StatusCode) {
+		if !retry || !retryable(resp.StatusCode) {
 			return c.notionError(method, path, statusErr)
 		}
 		if n > maxRetries {
