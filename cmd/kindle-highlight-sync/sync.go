@@ -83,10 +83,20 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if err != nil {
 		return err // 起動の失敗は exitcode.Browser（5）で包まれている
 	}
+	var record bool // Initial Sync で確認を通過し、取得を終えた（success か Book 単位の失敗）
 	defer func() {
 		// 本体の失敗を優先し、本体が成功したときだけ閉じる失敗を返す
-		if cerr := b.Close(); err == nil {
+		cerr := b.Close()
+		if err == nil {
 			err = cerr
+		}
+		// 記録は run の最終結果が確定した後、閉じるのにも成功したときだけ行う（§48）。閉じる失敗（exit 5）は success でも partial でもないので記録しない。
+		// 記録の失敗（exit 6）は本体が成功したときだけ返す
+		if !record || cerr != nil {
+			return
+		}
+		if merr := a.store.MarkInitialSyncCompleted(ctx, time.Now()); err == nil {
+			err = merr
 		}
 	}()
 
@@ -145,19 +155,13 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 			return err
 		}
 	}
-	var result error
+	// 確認を通過して取得を終えた run は、success でも Book 単位の失敗（partial、§72）でも閉じたあとに記録する（上の defer）。
+	// 全 Book に共通の失敗はここに届かず記録しない
+	record = !synced
 	if len(failed) > 0 {
-		result = exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
+		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
 	}
-	if synced {
-		return result
-	}
-	// 確認を通過して取得を終えた run は、success でも Book 単位の失敗（partial、§72）でも記録する（§48）。
-	// 全 Book に共通の失敗はここに届かず記録しない。本体の失敗を優先し、本体が成功したときだけ記録の失敗（exit 6）を返す
-	if merr := a.store.MarkInitialSyncCompleted(ctx, time.Now()); result == nil {
-		return merr
-	}
-	return result
+	return nil
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。

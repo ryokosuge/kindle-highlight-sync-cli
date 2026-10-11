@@ -286,12 +286,19 @@ func TestSyncInitial(t *testing.T) {
 				b.highlightErr = tt.highlightErr
 				stubBrowser(t, b, nil)
 
+				// 記録は閉じた後に行うので、Close の時点ではまだ記録されていない
+				var recordedAtClose bool
+				b.onClose = func() { recordedAtClose = initialSyncRecorded(t, p) }
+
 				code, stderr := runSync(t)
 				if code != tt.wantCode {
 					t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
 				}
 				if want := wantInitialPrompt + tt.wantStderr; stderr != want {
 					t.Errorf("run(sync) stderr = %q, want %q", stderr, want)
+				}
+				if recordedAtClose {
+					t.Error("initial_sync_completed_at recorded before the browser was closed")
 				}
 				if !initialSyncRecorded(t, p) {
 					t.Fatal("initial_sync_completed_at not recorded")
@@ -318,14 +325,15 @@ func TestSyncInitial(t *testing.T) {
 		}
 	})
 
-	t.Run("設定エラー（exit 3）・認証切れ（exit 2）・全 Book に共通の失敗で終わった run は記録しない", func(t *testing.T) {
+	t.Run("設定エラー（exit 3）・認証切れ（exit 2）・全 Book に共通の失敗・ブラウザを閉じる失敗（exit 5）で終わった run は記録しない", func(t *testing.T) {
+		closeErr := exitcode.New(exitcode.Browser, errors.New("source: close browser: boom"))
 		tests := []struct {
 			name         string
 			configTOML   string
 			token        string
 			pageHTML     []byte
-			listErr      error
 			highlightErr map[string]error
+			closeErr     error
 			wantCode     int
 			wantStderr   func(p config.Paths) string
 			wantRequests []string
@@ -370,6 +378,31 @@ func TestSyncInitial(t *testing.T) {
 				},
 				wantRequests: initialReadRequests,
 			},
+			{
+				// 取得を終えても Chrome を閉じるのに失敗した run は success ではないので記録せず、exit 5 はそのまま
+				name:       "確認のあとにブラウザを閉じるのに失敗すると exit 5 で記録しない",
+				configTOML: validConfigTOML,
+				token:      testDryRunToken,
+				closeErr:   closeErr,
+				wantCode:   5,
+				wantStderr: func(config.Paths) string {
+					return "browser error: source: close browser: boom\n"
+				},
+				wantRequests: initialReadRequests,
+			},
+			{
+				// Book 単位の失敗と閉じる失敗が重なった run も記録しない。返すのは本体の失敗（exit 7）
+				name:         "Book 単位の失敗のあとにブラウザを閉じるのに失敗すると exit 7 のまま記録しない",
+				configTOML:   validConfigTOML,
+				token:        testDryRunToken,
+				highlightErr: map[string]error{dryRunBookAmbiguous.ID: errSourceFormatBook},
+				closeErr:     closeErr,
+				wantCode:     7,
+				wantStderr: func(config.Paths) string {
+					return "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookAmbiguous.ID + " (unexpected notebook structure)\n"
+				},
+				wantRequests: initialReadRequests,
+			},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -382,6 +415,7 @@ func TestSyncInitial(t *testing.T) {
 					b.pageHTML = tt.pageHTML
 				}
 				b.highlightErr = tt.highlightErr
+				b.closeErr = tt.closeErr
 				stubBrowser(t, b, nil)
 
 				code, stderr := runSync(t)
