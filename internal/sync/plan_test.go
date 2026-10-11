@@ -18,8 +18,10 @@ type fakeDestination struct {
 	errs      map[string]error
 	remoteIDs map[string][]string // ページ ID ごとに ListHighlightIDs が返す Highlight ID
 	listErrs  map[string]error    // ページ ID ごとに ListHighlightIDs が返す error
+	writeErrs map[string]error    // Book ID ごとに CreateBook / AdoptBook が返す error
 	calls     []string
 	listCalls []string // ListHighlightIDs に渡ったページ ID の順
+	writes    []string // 呼ばれた CreateBook / AdoptBook の順（"create <Book ID>" / "adopt <ページ ID> <Book ID>"）
 }
 
 func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destination.BookMatch, error) {
@@ -30,12 +32,20 @@ func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destina
 	return f.matches[book.ID], nil
 }
 
-// CreateBook / AdoptBook は Destination を満たすためだけの stub。BuildPlan は書き込まないので呼ばれない。
-func (f *fakeDestination) CreateBook(context.Context, domain.Book) (destination.RemoteBook, error) {
-	return destination.RemoteBook{}, nil
+// CreateBook は呼ばれたことを writes に記録し、Book ID から決まる ID のページを返す。BuildPlan は書き込まないので呼ばれない。
+func (f *fakeDestination) CreateBook(_ context.Context, book domain.Book) (destination.RemoteBook, error) {
+	f.writes = append(f.writes, "create "+book.ID)
+	if err, ok := f.writeErrs[book.ID]; ok {
+		return destination.RemoteBook{}, err
+	}
+	return destination.RemoteBook{ID: "page-" + book.ID}, nil
 }
 
-func (f *fakeDestination) AdoptBook(context.Context, destination.RemoteBook, domain.Book) error {
+func (f *fakeDestination) AdoptBook(_ context.Context, remote destination.RemoteBook, book domain.Book) error {
+	f.writes = append(f.writes, "adopt "+remote.ID+" "+book.ID)
+	if err, ok := f.writeErrs[book.ID]; ok {
+		return err
+	}
 	return nil
 }
 
