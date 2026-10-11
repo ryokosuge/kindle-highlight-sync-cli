@@ -44,7 +44,7 @@ func TestPlanBookProperties(t *testing.T) {
 	}{
 		// author の段
 		{
-			name:    "今が空で Kindle が非空なら書く",
+			name:    "author は今が空で Kindle が非空なら書く",
 			current: policyPage(testASIN, ""),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
@@ -53,7 +53,7 @@ func TestPlanBookProperties(t *testing.T) {
 			},
 		},
 		{
-			name:    "今が空白だけで Kindle が非空なら書く",
+			name:    "author は今が空白だけで Kindle が非空なら書く",
 			current: policyPage(testASIN, " \u3000\t"),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
@@ -62,28 +62,28 @@ func TestPlanBookProperties(t *testing.T) {
 			},
 		},
 		{
-			name:    "今が非空なら書かない",
+			name:    "author は今が非空なら書かない",
 			current: policyPage(testASIN, "Kindle Author"),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
 			want:    BookPropertyValues{},
 		},
 		{
-			name:    "Kindle が空なら書かない",
+			name:    "author は Kindle が空なら書かない",
 			current: policyPage(testASIN, ""),
 			book:    policyBook(testASIN, "", nil),
 			mapping: policyMapping,
 			want:    BookPropertyValues{},
 		},
 		{
-			name:    "Kindle が空白だけなら書かない",
+			name:    "author は Kindle が空白だけなら書かない",
 			current: policyPage(testASIN, ""),
 			book:    policyBook(testASIN, " \u3000\t", nil),
 			mapping: policyMapping,
 			want:    BookPropertyValues{},
 		},
 		{
-			name:    "今も Kindle も非空で値が違っても書かない",
+			name:    "author は今も Kindle も非空で値が違っても書かない",
 			current: policyPage(testASIN, "Existing Author"),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
@@ -91,7 +91,7 @@ func TestPlanBookProperties(t *testing.T) {
 		},
 		// asin の段
 		{
-			name:    "今が空で Kindle が非空なら書く",
+			name:    "asin は今が空で Kindle が非空なら書く",
 			current: policyPage("", "Existing Author"),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
@@ -100,7 +100,7 @@ func TestPlanBookProperties(t *testing.T) {
 			},
 		},
 		{
-			name:    "今が空白だけで Kindle が非空なら書く",
+			name:    "asin は今が空白だけで Kindle が非空なら書く",
 			current: policyPage(" \u3000\t", "Existing Author"),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
@@ -109,21 +109,21 @@ func TestPlanBookProperties(t *testing.T) {
 			},
 		},
 		{
-			name:    "今が非空なら書かない",
+			name:    "asin は今が非空なら書かない",
 			current: policyPage(testOtherASIN, "Existing Author"),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
 			want:    BookPropertyValues{},
 		},
 		{
-			name:    "Kindle が空なら書かない",
+			name:    "asin は Kindle が空なら書かない",
 			current: policyPage("", "Existing Author"),
 			book:    policyBook("", "Kindle Author", nil),
 			mapping: policyMapping,
 			want:    BookPropertyValues{},
 		},
 		{
-			name:    "Kindle が空白だけなら書かない",
+			name:    "asin は Kindle が空白だけなら書かない",
 			current: policyPage("", "Existing Author"),
 			book:    policyBook(" \u3000\t", "Kindle Author", nil),
 			mapping: policyMapping,
@@ -131,7 +131,7 @@ func TestPlanBookProperties(t *testing.T) {
 		},
 		// last_annotated_at の段
 		{
-			name:    "非 nil なら今の値と比べずに書く",
+			name:    "last_annotated_at は非 nil なら今の値と比べずに書く",
 			current: policyPage("", ""),
 			book:    policyBook("", "", &date),
 			mapping: policyMapping,
@@ -140,7 +140,7 @@ func TestPlanBookProperties(t *testing.T) {
 			},
 		},
 		{
-			name:    "nil なら書かない",
+			name:    "last_annotated_at は nil なら書かない",
 			current: policyPage(testASIN, "Kindle Author"),
 			book:    policyBook(testASIN, "Kindle Author", nil),
 			mapping: policyMapping,
