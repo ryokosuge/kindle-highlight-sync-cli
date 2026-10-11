@@ -23,9 +23,11 @@ func page(id, kindleID, asin, title, author string) IndexedBook {
 
 func TestBookIndexMatch(t *testing.T) {
 	noASINBook := kindleBook("", "吾輩は猫である", "夏目漱石")
+	otherBook := kindleBook(testOtherASIN, "Other", "Other")
 	tests := []struct {
 		name             string
 		pages            []IndexedBook
+		update           func(ix *BookIndex)
 		hasAuthorMapping bool
 		book             domain.Book
 		wantStatus       BookMatchStatus
@@ -65,6 +67,48 @@ func TestBookIndexMatch(t *testing.T) {
 			hasAuthorMapping: true,
 			book:             kindleBook(testASIN, "Go", "Alan"),
 			wantStatus:       "ambiguous",
+		},
+		{
+			name: "作成したページを足すと、その Book ID の Book は ASIN が一致するページより優先して exact",
+			pages: []IndexedBook{
+				page("page-asin", "", testASIN, "Go", "Alan"),
+			},
+			update: func(ix *BookIndex) {
+				ix.AddCreated(RemoteBook{ID: "page-created"}, kindleBook(testASIN, "Go", "Alan").ID)
+			},
+			book:       kindleBook(testASIN, "Go", "Alan"),
+			wantStatus: "exact",
+			wantID:     "page-created",
+		},
+		{
+			name: "ASIN の無い Book も作成したページを足すと b1- の Book ID で exact",
+			update: func(ix *BookIndex) {
+				ix.AddCreated(RemoteBook{ID: "page-created"}, noASINBook.ID)
+			},
+			book:       noASINBook,
+			wantStatus: "exact",
+			wantID:     "page-created",
+		},
+		{
+			name: "同じ Book ID で作成したページを 2 回足すと ambiguous",
+			update: func(ix *BookIndex) {
+				ix.AddCreated(RemoteBook{ID: "page-created"}, noASINBook.ID)
+				ix.AddCreated(RemoteBook{ID: "page-created"}, noASINBook.ID)
+			},
+			book:       noASINBook,
+			wantStatus: "ambiguous",
+		},
+		{
+			name: "Adopt したページは、その Book ID の Book と Kindle ID Property の一致で exact",
+			pages: []IndexedBook{
+				page("page-title", "", "", noASINBook.Title, noASINBook.Author),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, noASINBook.ID)
+			},
+			book:       noASINBook,
+			wantStatus: "exact",
+			wantID:     "page-title",
 		},
 		// ASIN の段
 		{
@@ -223,6 +267,80 @@ func TestBookIndexMatch(t *testing.T) {
 		},
 		// Kindle ID Property が入っているページの除外
 		{
+			name: "Adopt したページは ASIN が一致する別の Book の候補にならない",
+			pages: []IndexedBook{
+				page("page-adopted", "", testASIN, "", ""),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-adopted"}, otherBook.ID)
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name: "Adopt したページは Title+Author が一致する別の Book の候補にならない",
+			pages: []IndexedBook{
+				page("page-adopted", "", "", "Go", "Alan"),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-adopted"}, otherBook.ID)
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name: "Adopt したページは Title だけが一致する別の Book の候補にならない",
+			pages: []IndexedBook{
+				page("page-adopted", "", "", "Go", ""),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-adopted"}, otherBook.ID)
+			},
+			hasAuthorMapping: false,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
+		{
+			name: "ASIN が一致する 2 件のうち 1 件を Adopt すると残りの 1 件が adoptable",
+			pages: []IndexedBook{
+				page("page-asin-1", "", testASIN, "", ""),
+				page("page-asin-2", "", testASIN, "", ""),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-asin-1"}, otherBook.ID)
+			},
+			book:       kindleBook(testASIN, "Go", "Alan"),
+			wantStatus: "adoptable",
+			wantID:     "page-asin-2",
+		},
+		{
+			name: "Title+Author が一致する 2 件のうち 1 件を Adopt すると残りの 1 件が adoptable",
+			pages: []IndexedBook{
+				page("page-title-author-1", "", "", "Go", "Alan"),
+				page("page-title-author-2", "", "", "Go", "Alan"),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title-author-1"}, otherBook.ID)
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "adoptable",
+			wantID:           "page-title-author-2",
+		},
+		{
+			name: "Adopt したページは別の Book の Book ID とは一致しない",
+			pages: []IndexedBook{
+				page("page-adopted", "", testASIN, "Go", "Alan"),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-adopted"}, otherBook.ID)
+			},
+			book:       kindleBook(testASIN, "Go", "Alan"),
+			wantStatus: "none",
+		},
+		{
 			name: "Kindle ID Property が入っているページは ASIN が一致しても候補にならない",
 			pages: []IndexedBook{
 				page("page-other-book", testOtherASIN, testASIN, "", ""),
@@ -286,7 +404,11 @@ func TestBookIndexMatch(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := NewBookIndex(tt.pages, tt.hasAuthorMapping).Match(tt.book)
+			ix := NewBookIndex(tt.pages, tt.hasAuthorMapping)
+			if tt.update != nil {
+				tt.update(ix)
+			}
+			got := ix.Match(tt.book)
 			if got.Status != tt.wantStatus {
 				t.Errorf("Match().Status = %q, want %q", got.Status, tt.wantStatus)
 			}
