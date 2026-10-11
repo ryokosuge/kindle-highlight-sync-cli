@@ -35,6 +35,9 @@ var checkAuth = func(ctx context.Context, b browser) error {
 	return nil
 }
 
+// newSyncPrompter は Initial Sync の確認の入出力を作る。テストは入力を差し替える。
+var newSyncPrompter = newPrompter
+
 // bookFailureKind は Book 単位の失敗の種類。Book ID と一緒に標準エラーに出すので、Title や Highlight の本文・Note は持たない（仕様書 §74）。
 type bookFailureKind string
 
@@ -69,7 +72,8 @@ func (e *booksFailedError) Error() string {
 
 // syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得する。
 // a.dryRun なら Highlight の取得は照合（BuildPlan）の中で 1 回だけ行い、予定の表を a.out に出して Notion と State は書かない（§63）。
-// テストは差し替えて先発を止めておく。後続の Epic が Notion への同期をここに足す。
+// initial_sync_completed_at が無ければ Initial Sync として、予定を組んで Create / Adopt の件数の確認を取ってから取得に進み（§47）、
+// 取得を終えた run を記録する（§48）。テストは差し替えて先発を止めておく。後続の Epic が Notion への同期を確認の後ろに足す。
 var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// Open に渡す ctx にタイムアウトを付けると Chrome ごと止まるので、Notebook を開く action だけに付ける
 	b, err := openBrowser(ctx, source.Options{
@@ -107,6 +111,21 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if a.dryRun {
 		return writeDryRunPlan(ctx, a, books, b)
 	}
+	_, synced, err := a.store.InitialSyncCompletedAt(ctx)
+	if err != nil {
+		return err // state.db を読めない失敗は exitcode.LocalState（6）で包まれている
+	}
+	if !synced {
+		// Initial Sync（§47）。予定の算出（BuildPlan）は Book 単位の失敗を許さないので、下の取得ループには流用せず Highlight を 2 回取る。
+		// 予定から除いた ASIN の無い Book は下のループでも同じ失敗に数えるので、ここでは捨てる
+		plan, _, err := buildSyncPlan(ctx, a, books, b)
+		if err != nil {
+			return err
+		}
+		if err := confirmInitialSync(a.prompt, plan.Summary, a.prompt.interactive(), a.yes); err != nil {
+			return err
+		}
+	}
 	// 取得した Highlight はまだ使わない。1 冊だけの構造の異常と ASIN の無い Book は Book ID と種類を集めて残りの Book を続け、
 	// 取り終えて 1 冊でもあれば SourceFormat（exit 7）で終わる（§72。exit 8 への切り替えと last_synced_at の扱いは Epic #7）。
 	// 全 Book に共通の枠の異常（source.ErrHighlightsFrame。§73）とそれ以外の失敗（取得の失敗・ctx の取消）は、その時点で種類を変えずに返す
@@ -126,10 +145,19 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 			return err
 		}
 	}
+	var result error
 	if len(failed) > 0 {
-		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
+		result = exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
 	}
-	return nil
+	if synced {
+		return result
+	}
+	// 確認を通過して取得を終えた run は、success でも Book 単位の失敗（partial、§72）でも記録する（§48）。
+	// 全 Book に共通の失敗はここに届かず記録しない。本体の失敗を優先し、本体が成功したときだけ記録の失敗（exit 6）を返す
+	if merr := a.store.MarkInitialSyncCompleted(ctx, time.Now()); result == nil {
+		return merr
+	}
+	return result
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。
@@ -181,11 +209,14 @@ func newSyncCmd(a *app) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			a.out = cmd.OutOrStdout()
+			a.prompt = newSyncPrompter(cmd)
+			a.store = newStateStore(a.paths)
 			return withLock(a, func() error { return syncBody(cmd.Context(), a, headed) })
 		},
 	}
 	cmd.Flags().BoolVar(&headed, "headed", false, "画面付きの Chrome で同期する（既定は headless）")
 	cmd.Flags().BoolVar(&a.dryRun, "dry-run", false, "Notion と State を変えずに、Book の照合の結果と追記する Highlight の数だけを出す")
+	cmd.Flags().BoolVar(&a.yes, "yes", false, "Initial Sync の Create / Adopt の確認を省く（入力が端末でないときに要る）")
 	return cmd
 }
 

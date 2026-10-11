@@ -390,23 +390,25 @@ func TestSyncDryRun(t *testing.T) {
 		}
 	})
 
-	t.Run("--dry-run を付けない sync は Notion に要求せず、標準出力に何も出さない", func(t *testing.T) {
+	t.Run("--dry-run を付けない Initial Sync の sync は予定の表を出さず、Notion には照合の読み取りだけを要求し、Highlight を予定と取得で 2 回取る", func(t *testing.T) {
 		setupXDG(t, validConfigTOML)
 		requests, clientCalls := setupDryRunNotion(t, dryRunReplies())
 		b := newDryRunBrowser()
 		stubBrowser(t, b, nil)
 
-		code, stderr := runSync(t)
+		code, stderr := runSync(t, "--yes")
 		if code != 0 || stderr != "" {
-			t.Errorf("run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
+			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 0 and empty", code, stderr)
 		}
-		if !slices.Equal(b.hlBooks, dryRunBooks) {
-			t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, dryRunBooks)
+		// 予定の算出は ambiguous を除いた Book の Highlight を取り、従来の取得は全 Book を取る
+		want := []domain.Book{dryRunBookExact, dryRunBookNew, dryRunBookExact, dryRunBookNew, dryRunBookAmbiguous}
+		if !slices.Equal(b.hlBooks, want) {
+			t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
 		}
-		if got := clientCalls(); got != 0 {
-			t.Errorf("newNotionClient calls = %d, want 0", got)
+		if got := clientCalls(); got != 1 {
+			t.Errorf("newNotionClient calls = %d, want 1", got)
 		}
-		assertRequests(t, requests())
+		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath)
 	})
 
 	t.Run("本物の sync が排他を持っている間の dry-run は待たずに exit 9 で終わる", func(t *testing.T) {
