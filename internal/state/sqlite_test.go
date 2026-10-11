@@ -633,3 +633,282 @@ func TestSQLiteStateStore_SaveHighlights(t *testing.T) {
 		}
 	})
 }
+
+func TestSQLiteStateStore_ListBooks(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("未記録", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			setup func(t *testing.T, path string)
+		}{
+			{
+				name:  "state.db が無い",
+				setup: func(*testing.T, string) {},
+			},
+			{
+				name: "state.db はあるが books が無い",
+				setup: func(t *testing.T, path string) {
+					execSQL(t, path, createHighlightsSQL)
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				tt.setup(t, path)
+				before := dirEntries(t, filepath.Dir(path))
+
+				books, err := s.ListBooks(ctx)
+				if err != nil {
+					t.Fatalf("ListBooks() error = %v", err)
+				}
+				if len(books) != 0 {
+					t.Errorf("ListBooks() = %v, want an empty map", books)
+				}
+				// 読むだけでは state.db を作らない
+				if got := dirEntries(t, filepath.Dir(path)); len(got) != len(before) {
+					t.Errorf("data dir entries after read = %v, want %v", got, before)
+				}
+			})
+		}
+	})
+
+	t.Run("state.db が開けない・読めないときは exit 6 の種類のエラー", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			setup func(t *testing.T, path string)
+		}{
+			{
+				name: "SQLite の形式でないファイル",
+				setup: func(t *testing.T, path string) {
+					if err := os.WriteFile(path, []byte("state"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+			{
+				name: "path がディレクトリ",
+				setup: func(t *testing.T, path string) {
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+			{
+				name: "last_synced_at が RFC 3339 でない",
+				setup: func(t *testing.T, path string) {
+					execSQL(t, path, createBooksSQL,
+						`INSERT INTO books (kindle_book_id, destination_book_id, asin, title, last_annotated_at, last_synced_at) VALUES ('B0BOOKAAAA', 'page-1', 'B0BOOKAAAA', 'title', '2026-10-11T00:00:00Z', 'yesterday')`)
+				},
+			},
+			{
+				name: "last_annotated_at が RFC 3339 でない",
+				setup: func(t *testing.T, path string) {
+					execSQL(t, path, createBooksSQL,
+						`INSERT INTO books (kindle_book_id, destination_book_id, asin, title, last_annotated_at, last_synced_at) VALUES ('B0BOOKAAAA', 'page-1', 'B0BOOKAAAA', 'title', 'yesterday', '2026-10-11T13:04:05Z')`)
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				tt.setup(t, path)
+
+				books, err := s.ListBooks(ctx)
+				if err == nil {
+					t.Fatalf("ListBooks() = %v, error = nil, want an error", books)
+				}
+				if got := exitcode.Code(err); got != localStateCode {
+					t.Errorf("exitcode.Code(err) = %d, want %d (err = %v)", got, localStateCode, err)
+				}
+				if books != nil {
+					t.Errorf("ListBooks() = %v, want nil on error", books)
+				}
+			})
+		}
+	})
+}
+
+func TestSQLiteStateStore_MarkBookSynced(t *testing.T) {
+	ctx := context.Background()
+	bookID := "B0BOOKAAAA"
+	lastAnnotatedAt := time.Date(2026, 10, 11, 0, 0, 0, 0, time.UTC) // internal/source/library.go と同じく日付の 00:00 UTC
+	book := BookState{
+		KindleBookID:      bookID,
+		DestinationBookID: "d0d0d0d0-0000-0000-0000-0000000000b1",
+		ASIN:              bookID,
+		Title:             "Go 言語による並行処理",
+		LastAnnotatedAt:   &lastAnnotatedAt,
+		LastSyncedAt:      completedAt,
+	}
+
+	t.Run("記録した行を別に開き直した store が返す", func(t *testing.T) {
+		jst := time.FixedZone("JST", 9*60*60)
+		tests := []struct {
+			name  string
+			marks []BookState
+			want  map[string]BookState
+		}{
+			{
+				name:  "state.db が無いところへ記録する",
+				marks: []BookState{book},
+				want:  map[string]BookState{bookID: book},
+			},
+			{
+				name: "2 回記録すると全列を上書きし行は 1 つのまま",
+				marks: []BookState{book, {
+					KindleBookID:      bookID,
+					DestinationBookID: "d0d0d0d0-0000-0000-0000-0000000000b2",
+					ASIN:              bookID,
+					Title:             "Go 言語による並行処理 第 2 版",
+					LastAnnotatedAt:   &lastAnnotatedAt,
+					LastSyncedAt:      completedAt.Add(time.Hour),
+				}},
+				want: map[string]BookState{bookID: {
+					KindleBookID:      bookID,
+					DestinationBookID: "d0d0d0d0-0000-0000-0000-0000000000b2",
+					ASIN:              bookID,
+					Title:             "Go 言語による並行処理 第 2 版",
+					LastAnnotatedAt:   &lastAnnotatedAt,
+					LastSyncedAt:      completedAt.Add(time.Hour),
+				}},
+			},
+			{
+				name:  "UTC 以外の LastSyncedAt は UTC で返る",
+				marks: []BookState{{KindleBookID: bookID, DestinationBookID: book.DestinationBookID, ASIN: bookID, Title: book.Title, LastAnnotatedAt: &lastAnnotatedAt, LastSyncedAt: completedAt.In(jst)}},
+				want:  map[string]BookState{bookID: book},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				for _, b := range tt.marks {
+					if err := s.MarkBookSynced(ctx, b); err != nil {
+						t.Fatalf("MarkBookSynced(%v) error = %v", b, err)
+					}
+				}
+
+				reopened := NewSQLiteStateStore(path)
+				got, err := reopened.ListBooks(ctx)
+				if err != nil {
+					t.Fatalf("ListBooks() error = %v", err)
+				}
+				if !reflect.DeepEqual(got, tt.want) {
+					t.Errorf("ListBooks() = %v, want %v", got, tt.want)
+				}
+				if n := countRows(t, path, "books"); n != len(tt.want) {
+					t.Errorf("countRows(books) = %d, want %d", n, len(tt.want))
+				}
+			})
+		}
+	})
+
+	t.Run("ASIN と LastAnnotatedAt が無い行は NULL で保存し、読むと空と nil で返る", func(t *testing.T) {
+		s, path := newTestStore(t)
+		b := BookState{
+			KindleBookID:      bookID,
+			DestinationBookID: book.DestinationBookID,
+			Title:             book.Title,
+			LastSyncedAt:      completedAt,
+		}
+		if err := s.MarkBookSynced(ctx, b); err != nil {
+			t.Fatalf("MarkBookSynced() error = %v", err)
+		}
+
+		got, err := NewSQLiteStateStore(path).ListBooks(ctx)
+		if err != nil {
+			t.Fatalf("ListBooks() error = %v", err)
+		}
+		want := map[string]BookState{bookID: b}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("ListBooks() = %v, want %v", got, want)
+		}
+
+		db, err := sql.Open(sqliteDriverName, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := db.Close(); err != nil {
+				t.Errorf("db.Close() error = %v", err)
+			}
+		}()
+		var nulls int
+		if err := db.QueryRow(`SELECT count(*) FROM books WHERE kindle_book_id = ? AND asin IS NULL AND last_annotated_at IS NULL`, bookID).Scan(&nulls); err != nil {
+			t.Fatalf("QueryRow() error = %v", err)
+		}
+		if nulls != 1 {
+			t.Errorf("rows with asin IS NULL AND last_annotated_at IS NULL = %d, want %d", nulls, 1)
+		}
+	})
+
+	t.Run("last_synced_at と last_annotated_at の値は RFC 3339 の UTC", func(t *testing.T) {
+		s, path := newTestStore(t)
+		jst := time.FixedZone("JST", 9*60*60)
+		annotatedJST := lastAnnotatedAt.In(jst)
+		b := book
+		b.LastAnnotatedAt = &annotatedJST
+		b.LastSyncedAt = completedAt.In(jst)
+		if err := s.MarkBookSynced(ctx, b); err != nil {
+			t.Fatalf("MarkBookSynced() error = %v", err)
+		}
+		db, err := sql.Open(sqliteDriverName, path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if err := db.Close(); err != nil {
+				t.Errorf("db.Close() error = %v", err)
+			}
+		}()
+		var syncedAt, annotatedAt string
+		if err := db.QueryRow(`SELECT last_synced_at, last_annotated_at FROM books WHERE kindle_book_id = ?`, bookID).Scan(&syncedAt, &annotatedAt); err != nil {
+			t.Fatalf("QueryRow() error = %v", err)
+		}
+		if want := "2026-10-11T13:04:05Z"; syncedAt != want {
+			t.Errorf("books.last_synced_at = %q, want %q", syncedAt, want)
+		}
+		if want := "2026-10-11T00:00:00Z"; annotatedAt != want {
+			t.Errorf("books.last_annotated_at = %q, want %q", annotatedAt, want)
+		}
+	})
+
+	t.Run("state.db が開けない・書けないときは exit 6 の種類のエラー", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			setup func(t *testing.T, path string)
+		}{
+			{
+				name: "SQLite の形式でないファイル",
+				setup: func(t *testing.T, path string) {
+					if err := os.WriteFile(path, []byte("state"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+			{
+				name: "path がディレクトリ",
+				setup: func(t *testing.T, path string) {
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				tt.setup(t, path)
+
+				err := s.MarkBookSynced(ctx, book)
+				if err == nil {
+					t.Fatal("MarkBookSynced() error = nil, want an error")
+				}
+				if got := exitcode.Code(err); got != localStateCode {
+					t.Errorf("exitcode.Code(err) = %d, want %d (err = %v)", got, localStateCode, err)
+				}
+			})
+		}
+	})
+}

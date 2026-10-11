@@ -44,6 +44,20 @@ ON CONFLICT (key) DO UPDATE SET value = excluded.value`
 	selectHighlightsSQL = `SELECT kindle_highlight_id, kindle_book_id, destination_highlight_id, last_synced_at FROM highlights WHERE kindle_book_id = ?`
 	upsertHighlightSQL  = `INSERT INTO highlights (kindle_highlight_id, kindle_book_id, destination_highlight_id, last_synced_at) VALUES (?, ?, ?, ?)
 ON CONFLICT (kindle_highlight_id) DO UPDATE SET kindle_book_id = excluded.kindle_book_id, destination_highlight_id = excluded.destination_highlight_id, last_synced_at = excluded.last_synced_at`
+
+	// createBooksSQL は §59 の books の DDL に IF NOT EXISTS を足したもの。
+	createBooksSQL = `CREATE TABLE IF NOT EXISTS books (
+    kindle_book_id TEXT PRIMARY KEY,
+    destination_book_id TEXT NOT NULL,
+    asin TEXT,
+    title TEXT NOT NULL,
+    last_annotated_at TEXT,
+    last_synced_at TEXT
+)`
+	// selectBooksSQL は books の全行を読む。
+	selectBooksSQL = `SELECT kindle_book_id, destination_book_id, asin, title, last_annotated_at, last_synced_at FROM books`
+	upsertBookSQL  = `INSERT INTO books (kindle_book_id, destination_book_id, asin, title, last_annotated_at, last_synced_at) VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT (kindle_book_id) DO UPDATE SET destination_book_id = excluded.destination_book_id, asin = excluded.asin, title = excluded.title, last_annotated_at = excluded.last_annotated_at, last_synced_at = excluded.last_synced_at`
 )
 
 // SQLiteStateStore は state.db（modernc.org/sqlite）に読み書きする StateStore。
@@ -187,6 +201,86 @@ func (s *SQLiteStateStore) SaveHighlights(ctx context.Context, states []Highligh
 		}
 		return nil
 	})
+}
+
+// MarkBookSynced は b を books に 1 行記録する（ASIN が空・LastAnnotatedAt が nil なら NULL）。失敗は exitcode.LocalState（6）で包む。
+func (s *SQLiteStateStore) MarkBookSynced(ctx context.Context, b BookState) error {
+	return s.withDB(func(db *sql.DB) error {
+		if _, err := db.ExecContext(ctx, createBooksSQL); err != nil {
+			return fmt.Errorf("create books: %w", err)
+		}
+		var asin, lastAnnotatedAt any
+		if b.ASIN != "" {
+			asin = b.ASIN
+		}
+		if b.LastAnnotatedAt != nil {
+			lastAnnotatedAt = b.LastAnnotatedAt.UTC().Format(time.RFC3339)
+		}
+		if _, err := db.ExecContext(ctx, upsertBookSQL, b.KindleBookID, b.DestinationBookID, asin, b.Title, lastAnnotatedAt, b.LastSyncedAt.UTC().Format(time.RFC3339)); err != nil {
+			return fmt.Errorf("save book %s: %w", b.KindleBookID, err)
+		}
+		return nil
+	})
+}
+
+// ListBooks は state.db が無ければ os.Stat だけで空の map を返し、ファイルを作らない。
+// state.db が開けない・読めないときは exitcode.LocalState（6）で包んだエラーを返す。
+func (s *SQLiteStateStore) ListBooks(ctx context.Context) (map[string]BookState, error) {
+	exists, err := s.stateFileExists()
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return map[string]BookState{}, nil
+	}
+
+	var books map[string]BookState
+	err = s.withDB(func(db *sql.DB) error {
+		ok, err := hasTable(ctx, db, "books")
+		if err != nil {
+			return err
+		}
+		if !ok {
+			books = map[string]BookState{}
+			return nil
+		}
+		rows, err := db.QueryContext(ctx, selectBooksSQL)
+		if err != nil {
+			return fmt.Errorf("read books: %w", err)
+		}
+		defer func() { _ = rows.Close() }()
+		books = map[string]BookState{}
+		for rows.Next() {
+			var b BookState
+			var asin, lastAnnotatedAt, lastSyncedAt sql.NullString
+			if err := rows.Scan(&b.KindleBookID, &b.DestinationBookID, &asin, &b.Title, &lastAnnotatedAt, &lastSyncedAt); err != nil {
+				return fmt.Errorf("read books: %w", err)
+			}
+			b.ASIN = asin.String
+			if lastAnnotatedAt.Valid {
+				at, err := time.Parse(time.RFC3339, lastAnnotatedAt.String)
+				if err != nil {
+					return fmt.Errorf("parse books.last_annotated_at of %s: %w", b.KindleBookID, err)
+				}
+				b.LastAnnotatedAt = &at
+			}
+			if lastSyncedAt.Valid {
+				b.LastSyncedAt, err = time.Parse(time.RFC3339, lastSyncedAt.String)
+				if err != nil {
+					return fmt.Errorf("parse books.last_synced_at of %s: %w", b.KindleBookID, err)
+				}
+			}
+			books[b.KindleBookID] = b
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("read books: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return books, nil
 }
 
 // stateFileExists は state.db が在るかを返す。読むだけの操作が state.db を作らないための判定。
