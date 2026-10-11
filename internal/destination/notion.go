@@ -13,6 +13,8 @@ import (
 type pageQuerier interface {
 	QueryDataSource(ctx context.Context, dataSourceID string) ([]notion.Page, error)
 	ListBlockChildren(ctx context.Context, blockID string) ([]notion.Block, error)
+	CreatePage(ctx context.Context, dataSourceID string, properties map[string]notion.PropertyInput) (string, error)
+	UpdatePage(ctx context.Context, pageID string, properties map[string]notion.PropertyInput) error
 }
 
 const quoteBlockType = "quote"
@@ -21,7 +23,7 @@ const quoteBlockType = "quote"
 type NotionDestination struct {
 	client pageQuerier
 	notion config.Notion
-	index  *BookIndex // 最初の FindBook で作る
+	index  *BookIndex // 最初の FindBook / CreateBook / AdoptBook で作る
 }
 
 var _ Destination = (*NotionDestination)(nil)
@@ -31,17 +33,27 @@ func NewNotionDestination(client *notion.Client, cfg config.Notion) *NotionDesti
 	return &NotionDestination{client: client, notion: cfg}
 }
 
-// FindBook は最初の呼び出しで Data Source の全ページを取り、index を作ってから照合する（§10）。
-// 全件取得に失敗したら index を作らずに error（exitcode.Notion）を返し、次の呼び出しで取り直す。
+// FindBook は index をまだ作っていなければ作ってから照合する（§10）。Data Source を取り直すことはない。
 func (d *NotionDestination) FindBook(ctx context.Context, book domain.Book) (BookMatch, error) {
-	if d.index == nil {
-		pages, err := d.client.QueryDataSource(ctx, d.notion.DataSourceID)
-		if err != nil {
-			return BookMatch{}, err
-		}
-		d.index = NewBookIndex(indexedBooks(pages, d.notion.Mapping), d.notion.Mapping.Author != "")
+	if err := d.ensureIndex(ctx); err != nil {
+		return BookMatch{}, err
 	}
 	return d.index.Match(book), nil
+}
+
+// ensureIndex は index が無ければ Data Source の全ページを取って作る。CreateBook / AdoptBook で書いたページは
+// index にだけ反映するので、同じ NotionDestination では全件取得は 1 回で済む。
+// 全件取得に失敗したら index を作らずに error（exitcode.Notion）を返し、次の呼び出しで取り直す。
+func (d *NotionDestination) ensureIndex(ctx context.Context) error {
+	if d.index != nil {
+		return nil
+	}
+	pages, err := d.client.QueryDataSource(ctx, d.notion.DataSourceID)
+	if err != nil {
+		return err
+	}
+	d.index = NewBookIndex(indexedBooks(pages, d.notion.Mapping), d.notion.Mapping.Author != "")
+	return nil
 }
 
 // ListHighlightIDs は Book のページの直下の子 block を全件取り、Sync Marker のある Quote Block（§21）を
