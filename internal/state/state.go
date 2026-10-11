@@ -20,7 +20,8 @@ type StateStore interface {
 	// 未記録（state.db が無い・highlights が無い・その Book の行が無い）なら空の map で、エラーにしない。読むだけでは state.db を作らない。
 	ListHighlightIDs(ctx context.Context, bookID string) (map[string]HighlightState, error)
 	// SaveHighlights は states を 1 つの transaction で highlights に保存する（同じ KindleHighlightID は上書き）。
-	// state.db と highlights が無ければ作る。失敗したときは batch の行は 1 行も残らない。
+	// state.db と highlights が無ければ作る。commit 前に失敗したときは batch の行は 1 行も残らない。
+	// commit が成功したあとに state.db の Close が失敗したときも exitcode.LocalState（6）のエラーを返すが、行は保存済み。
 	// books に行は作らない。foreign_keys は有効にしないので、books に行が無い Book の Highlight も保存できる。
 	SaveHighlights(ctx context.Context, states []HighlightState) error
 }

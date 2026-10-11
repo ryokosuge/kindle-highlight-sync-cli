@@ -161,7 +161,9 @@ func (s *SQLiteStateStore) ListHighlightIDs(ctx context.Context, bookID string) 
 	return states, nil
 }
 
-// SaveHighlights は states を 1 つの transaction で保存する。失敗は exitcode.LocalState（6）で包み、batch の行は残さない。
+// SaveHighlights は states を 1 つの transaction で保存する。失敗は exitcode.LocalState（6）で包む。
+// commit 前に失敗したときは batch の行を残さない。commit が成功したあとに Close が失敗したときもエラーを返すが、
+// 行は保存済み（withDB は body が成功したときだけ Close の失敗を返す）。
 func (s *SQLiteStateStore) SaveHighlights(ctx context.Context, states []HighlightState) error {
 	return s.withDB(func(db *sql.DB) error {
 		tx, err := db.BeginTx(ctx, nil)
