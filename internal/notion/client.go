@@ -31,14 +31,24 @@ type Client struct {
 	retry    retryPolicy
 }
 
-// redactedError は token を隠したメッセージだけを公開する。原因は token を含みうるので Unwrap では返さず、
-// 呼び出し側の取り消し判定に要る context.Canceled / context.DeadlineExceeded の errors.Is だけを委譲する。
+// redactedError は token を隠したメッセージと StatusError のみを公開する。原因は token を含みうるので
+// Unwrap では返さず、呼び出し側の取り消し判定に要る errors.Is と As だけを委譲する。
 type redactedError struct {
 	message string
 	cause   error
+	status  *StatusError
 }
 
 func (e *redactedError) Error() string { return e.message }
+
+func (e *redactedError) As(target any) bool {
+	status, ok := target.(**StatusError)
+	if !ok || e.status == nil {
+		return false
+	}
+	*status = e.status
+	return true
+}
 
 func (e *redactedError) Is(target error) bool {
 	return (target == context.Canceled || target == context.DeadlineExceeded) && errors.Is(e.cause, target)
@@ -105,9 +115,19 @@ func New(token string, opts ...Option) *Client {
 
 // notionError は Client が返す error の唯一の出口。メッセージは必ず redactor を通す。
 func (c *Client) notionError(method, path string, err error) error {
+	var status *StatusError
+	var se *StatusError
+	if errors.As(err, &se) {
+		status = &StatusError{
+			Status:  se.Status,
+			Code:    c.redactor.String(se.Code),
+			message: c.redactor.String(se.message),
+		}
+	}
 	return exitcode.New(exitcode.Notion, &redactedError{
 		message: c.redactor.String(fmt.Sprintf("notion: %s %s: %v", method, path, err)),
 		cause:   err,
+		status:  status,
 	})
 }
 
@@ -184,19 +204,35 @@ func (c *Client) send(ctx context.Context, method, path string, body []byte) (*h
 	return resp, respBody, nil
 }
 
-func statusError(status int, body []byte) error {
+// StatusError は Notion が 2xx 以外で返した HTTP status と Notion の code。Client の error から errors.As で取り出せる。
+type StatusError struct {
+	Status  int
+	Code    string
+	message string
+}
+
+func (e *StatusError) Error() string {
+	message := fmt.Sprintf("HTTP %d", e.Status)
+	if e.Code != "" {
+		message += " " + e.Code
+		if e.message != "" {
+			message += ": " + e.message
+		}
+	}
+	return message
+}
+
+func statusError(status int, body []byte) *StatusError {
 	var apiError struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	}
-	message := fmt.Sprintf("HTTP %d", status)
+	result := &StatusError{Status: status}
 	if json.Unmarshal(body, &apiError) == nil && apiError.Code != "" {
-		message += " " + apiError.Code
-		if apiError.Message != "" {
-			message += ": " + apiError.Message
-		}
+		result.Code = apiError.Code
+		result.message = apiError.Message
 	}
-	return errors.New(message)
+	return result
 }
 
 func (c *Client) invalidResponse(method, path, format string, args ...any) error {
