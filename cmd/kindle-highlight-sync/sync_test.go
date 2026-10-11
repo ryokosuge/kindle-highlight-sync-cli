@@ -13,16 +13,19 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/config"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/lock"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/state"
 )
 
 const (
 	wantSyncShort         = "Kindle の Highlight と Note を Notion に同期する"
 	wantSyncHeadedUsage   = "画面付きの Chrome で同期する（既定は headless）"
 	wantSyncDryRunUsage   = "Notion と State を変えずに、Book の照合の結果と追記する Highlight の数だけを出す"
+	wantSyncYesUsage      = "Initial Sync の Create / Adopt の確認を省く（入力が端末でないときに要る）"
 	wantAlreadyRunningErr = "already running: another kindle-highlight-sync process is running\n"
 )
 
@@ -33,10 +36,25 @@ func stubReachedBrowser(t *testing.T) (*fakeBrowser, *browserStub) {
 	return b, stubBrowser(t, b, nil)
 }
 
-func runSync(t *testing.T) (code int, stderr string) {
+// setupSyncedXDG は setupXDG に加えて Initial Sync 済みの State（initial_sync_completed_at あり）を置く。
+// 通常の sync のケースは Initial Sync の予定の算出（config.toml・token・Notion が要る）に入らずに従来の振る舞いを確かめる。
+func setupSyncedXDG(t *testing.T, configTOML string) config.Paths {
+	t.Helper()
+	p := setupXDG(t, configTOML)
+	if err := os.MkdirAll(p.DataDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.NewSQLiteStateStore(p.StateFile()).MarkInitialSyncCompleted(context.Background(), time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// runSync は sync を args 付きで走らせる。通常の sync は標準出力に何も出さない。
+func runSync(t *testing.T, args ...string) (code int, stderr string) {
 	t.Helper()
 	var stdout, stderrBuf bytes.Buffer
-	code = run([]string{"sync"}, &stdout, &stderrBuf)
+	code = run(append([]string{"sync"}, args...), &stdout, &stderrBuf)
 	if stdout.Len() != 0 {
 		t.Errorf("run(sync) stdout = %q, want empty", stdout.String())
 	}
@@ -108,7 +126,7 @@ func TestSync(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				p := setupXDG(t, "")
+				p := setupSyncedXDG(t, "")
 				b, s := stubReachedBrowser(t)
 
 				var stdout, stderr bytes.Buffer
@@ -129,7 +147,7 @@ func TestSync(t *testing.T) {
 	})
 
 	t.Run("Notebook に到達し認証を確かめたあと Book 一覧を最後まで取得し、Book ごとに全 Highlight を取得して exit 0 で終わり、Book と Highlight を出力しない", func(t *testing.T) {
-		setupXDG(t, "")
+		setupSyncedXDG(t, "")
 		books := []domain.Book{
 			{ID: "book-id-1", ASIN: "B000000001", Title: "Distinctive Book One"},
 			{ID: "book-id-2", ASIN: "B000000002", Title: "Distinctive Book Two"},
@@ -246,7 +264,7 @@ func TestSync(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				setupXDG(t, "")
+				setupSyncedXDG(t, "")
 				b := &fakeBrowser{
 					reached: true,
 					books:   tt.books,
@@ -383,7 +401,7 @@ func TestSync(t *testing.T) {
 	})
 
 	t.Run("Notebook を開く action には 1 分の期限が付き、Open と Book 一覧・Highlight の取得に渡す ctx には付かない", func(t *testing.T) {
-		setupXDG(t, "")
+		setupSyncedXDG(t, "")
 		b := &fakeBrowser{reached: true, books: []domain.Book{{ID: "book-id-1", ASIN: "B000000001"}, {ID: "book-id-2", ASIN: "B000000002"}}}
 		// stubBrowser は渡った ctx を見ないので、fake を返す関数の中で期限の無いことを確かめる
 		orig := openBrowser
@@ -503,7 +521,7 @@ func TestSync(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				setupXDG(t, "")
+				setupSyncedXDG(t, "")
 				b := &fakeBrowser{
 					reached:  tt.reached,
 					pageURL:  tt.pageURL,
@@ -586,7 +604,7 @@ func TestSync(t *testing.T) {
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
-				setupXDG(t, "")
+				setupSyncedXDG(t, "")
 				stubBrowser(t, &fakeBrowser{
 					reached:      tt.reached,
 					listErr:      tt.listErr,
@@ -607,7 +625,7 @@ func TestSync(t *testing.T) {
 	})
 
 	t.Run("ブラウザは排他を解放する前に閉じられる", func(t *testing.T) {
-		p := setupXDG(t, "")
+		p := setupSyncedXDG(t, "")
 		lockFile := filepath.Join(p.DataDir, "run.lock")
 		codeAtClose := -1
 		b, _ := stubReachedBrowser(t)
@@ -654,7 +672,7 @@ func TestSync(t *testing.T) {
 	})
 
 	t.Run("前の実行の run.lock が残っていても誰も持っていなければ exit 0 で終わる", func(t *testing.T) {
-		p := setupXDG(t, "")
+		p := setupSyncedXDG(t, "")
 		stubReachedBrowser(t)
 		lockFile := filepath.Join(p.DataDir, "run.lock")
 		if err := os.MkdirAll(p.DataDir, 0o700); err != nil {
@@ -696,7 +714,7 @@ func TestSync(t *testing.T) {
 		if code := run([]string{"sync", "--help"}, &stdout, &stderr); code != 0 {
 			t.Errorf("run(sync --help) code = %d, stderr = %q, want 0", code, stderr.String())
 		}
-		for flag, usage := range map[string]string{"--headed": wantSyncHeadedUsage, "--dry-run": wantSyncDryRunUsage} {
+		for flag, usage := range map[string]string{"--headed": wantSyncHeadedUsage, "--dry-run": wantSyncDryRunUsage, "--yes": wantSyncYesUsage} {
 			var found bool
 			for line := range strings.Lines(stdout.String()) {
 				if strings.Contains(line, flag) && strings.Contains(line, usage) {

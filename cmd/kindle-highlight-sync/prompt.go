@@ -34,6 +34,9 @@ func newPrompter(cmd *cobra.Command) *prompter {
 	return &prompter{in: bufio.NewReader(cmd.InOrStdin()), term: terminalInput(cmd), out: cmd.ErrOrStderr()}
 }
 
+// interactive は入力が端末か（terminalInput(cmd) != nil）を返す。
+func (p *prompter) interactive() bool { return p.term != nil }
+
 func (p *prompter) line(question string) (string, error) {
 	if _, err := fmt.Fprintf(p.out, "%s: ", question); err != nil {
 		return "", err
