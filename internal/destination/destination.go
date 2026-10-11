@@ -33,8 +33,11 @@ type BookMatch struct {
 	Book   *RemoteBook
 }
 
-// Destination は §6.2 のうち、照合と Highlight ID の一覧だけを持つ。書き込みの method は Epic #7 で足す。
+// Destination は §6.2 のうち、照合・Book のページの作成と Adopt・Highlight ID の一覧を持つ。
+// UpdateBook と AppendHighlights は Epic #7 の後続の Task で足す。
 type Destination interface {
 	FindBook(ctx context.Context, book domain.Book) (BookMatch, error)
+	CreateBook(ctx context.Context, book domain.Book) (RemoteBook, error)
+	AdoptBook(ctx context.Context, remote RemoteBook, book domain.Book) error
 	ListHighlightIDs(ctx context.Context, remote RemoteBook) (map[string]RemoteHighlight, error)
 }
