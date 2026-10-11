@@ -7,8 +7,8 @@ import (
 	"time"
 )
 
-// StateStore は §6.3 のうち、Initial Sync の判定と完了の記録と、Book ごとの既知の Highlight の読み取りと保存を持つ。
-// Book の記録の method は使う AC で足す。
+// StateStore は §6.3 のうち、Initial Sync の判定と完了の記録、同期を終えた Book の記録と読み取り、
+// Book ごとの既知の Highlight の読み取りと保存を持つ。
 type StateStore interface {
 	// InitialSyncCompletedAt は sync_meta の initial_sync_completed_at を返す。
 	// 未記録（state.db が無い・行が無い）なら ok は false で、エラーにしない。読むだけでは state.db を作らない。
@@ -24,6 +24,23 @@ type StateStore interface {
 	// commit が成功したあとに state.db の Close が失敗したときも exitcode.LocalState（6）のエラーを返すが、行は保存済み。
 	// books に行は作らない。foreign_keys は有効にしないので、books に行が無い Book の Highlight も保存できる。
 	SaveHighlights(ctx context.Context, states []HighlightState) error
+	// MarkBookSynced は books に b を 1 行記録する（同じ KindleBookID は全列を上書き）。
+	// state.db と books が無ければ作る。
+	MarkBookSynced(ctx context.Context, b BookState) error
+	// ListBooks は books の全行を KindleBookID を key にした map で返す。
+	// 未記録（state.db が無い・books が無い）なら空の map で、エラーにしない。読むだけでは state.db を作らない。
+	// 照合には使わない（照合は Kindle ID Property で行う）。foreign_keys は有効にしない。
+	ListBooks(ctx context.Context) (map[string]BookState, error)
+}
+
+// BookState は books の 1 行（§59）。
+type BookState struct {
+	KindleBookID      string
+	DestinationBookID string // Notion Page ID
+	ASIN              string // 空なら NULL で保存する
+	Title             string
+	LastAnnotatedAt   *time.Time // nil なら NULL で保存する
+	LastSyncedAt      time.Time
 }
 
 // HighlightState は highlights の 1 行（§59）。
