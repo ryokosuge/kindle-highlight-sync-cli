@@ -74,7 +74,8 @@ func (e *booksNotSyncedError) Error() string {
 // 1 冊の書き込みが 400 / 5xx / タイムアウトで失敗してもその Book を Failed に残して残りを続ける（§72）。
 // タイムアウトで作成の結果が分からない Book は再送しない（§29。次の sync の照合で作成済みなら exact になる）。
 // 書き込みが 401 / 403 / 404 で失敗したとき（§73）と FindBook が失敗したときは、その時点で残りを書かずに exitcode.Notion の error を返す。
-// そのときの ApplyResult には止まるまでの Book が入っている。
+// 書き込みが context のキャンセルで失敗したときも残りを書かずに止め、元の error を包まずにそのまま返す。
+// どちらのときも ApplyResult には止まるまでの Book が入っている。
 // 返した error が nil でも skip / 失敗はあり得るので、呼び出し側は PartialFailure で確かめる。
 func ApplyBooks(ctx context.Context, books []domain.Book, dst destination.Destination) (ApplyResult, error) {
 	var r ApplyResult
@@ -109,8 +110,13 @@ func ApplyBooks(ctx context.Context, books []domain.Book, dst destination.Destin
 	return r, nil
 }
 
-// fail は書き込みの失敗を仕分ける。fatal（§73）なら exitcode.Notion の error を返し、そうでなければ Failed に足して nil を返す。
+// fail は書き込みの失敗を仕分ける。context のキャンセルなら Book 単位の失敗でも fatal でもなく、元の error をそのまま返して止める
+// （中断時の exit code は呼び出し側が決める）。fatal（§73）なら exitcode.Notion の error を返し、そうでなければ Failed に足して nil を返す。
+// タイムアウト（context.DeadlineExceeded）はキャンセルに含めず、Book 単位の失敗として続ける（§72）。
 func (r *ApplyResult) fail(bookID string, kind BookFailureKind, err error) error {
+	if errors.Is(err, context.Canceled) {
+		return err
+	}
 	if isFatalWrite(err) {
 		return exitcode.New(exitcode.Notion, fmt.Errorf("sync: %s %s: %w", kind, bookID, err))
 	}

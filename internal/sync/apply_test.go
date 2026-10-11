@@ -38,6 +38,9 @@ func notionStatusError(status int) error {
 // notionTimeoutError は Notion client がタイムアウトに返す error の形（status は無い）。
 var notionTimeoutError = exitcode.New(exitcode.Notion, fmt.Errorf("notion: POST /v1/pages: %w", context.DeadlineExceeded))
 
+// notionCanceledError は Notion client が context のキャンセルに返す error の形。
+var notionCanceledError = exitcode.New(exitcode.Notion, fmt.Errorf("notion: POST /v1/pages: %w", context.Canceled))
+
 func TestApplyBooks(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -49,6 +52,7 @@ func TestApplyBooks(t *testing.T) {
 		wantWrites []string
 		wantCode   int    // ApplyBooks が返す error の exit code（0 なら nil）
 		wantErr    string // ApplyBooks が返す error の文言
+		wantSame   error  // nil 以外なら、ApplyBooks が返す error がこの値そのもの（包んでいない）であることを確かめる
 	}{
 		{
 			name:    "none は CreateBook、adoptable は AdoptBook を呼び、exact は何も書かず、ambiguous は skip する",
@@ -108,6 +112,17 @@ func TestApplyBooks(t *testing.T) {
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
 		},
 		{
+			name:       "CreateBook が context のキャンセルで失敗したら残りの Book を書かずに元の error をそのまま返す",
+			books:      applyBooks,
+			matches:    applyMatches,
+			writeErrs:  map[string]error{"book-new": notionCanceledError},
+			want:       ApplyResult{},
+			wantWrites: []string{"create book-new"},
+			wantCode:   4,
+			wantErr:    "notion: POST /v1/pages: context canceled",
+			wantSame:   notionCanceledError,
+		},
+		{
 			name:       "CreateBook が 401 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
 			books:      applyBooks,
 			matches:    applyMatches,
@@ -158,6 +173,9 @@ func TestApplyBooks(t *testing.T) {
 			}
 			if err != nil && err.Error() != tt.wantErr {
 				t.Errorf("err = %q, want %q", err.Error(), tt.wantErr)
+			}
+			if tt.wantSame != nil && err != tt.wantSame {
+				t.Errorf("err = %v (%T), want the same error %v", err, err, tt.wantSame)
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ApplyBooks() = %+v, want %+v", got, tt.want)
