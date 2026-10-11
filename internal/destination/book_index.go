@@ -1,6 +1,10 @@
 package destination
 
-import "github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+import (
+	"slices"
+
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+)
 
 // IndexedBook は同期先の 1 ページを、照合に要る値だけで表したもの。
 type IndexedBook struct {
@@ -15,7 +19,7 @@ type titleAuthorKey struct {
 	title, author string
 }
 
-// BookIndex は §10 のメモリ上の index。値は同じ key の候補をすべて持つ。
+// BookIndex は §10 のメモリ上の index。値は同じ key の候補をすべて持ち、Kindle ID Property が空のページは adoptable にも保持する。
 // ASIN / Title+Author / Title の index には Kindle ID Property が空のページ（Adopt の候補、§11）だけを入れる。
 // 空の値（空の Kindle ID Property・ASIN、正規化して空になる Title・Author）は key にしないので、空どうしは一致しない。
 type BookIndex struct {
@@ -23,6 +27,7 @@ type BookIndex struct {
 	byASIN                  map[string][]IndexedBook
 	byNormalizedTitleAuthor map[titleAuthorKey][]IndexedBook
 	byNormalizedTitle       map[string][]IndexedBook
+	adoptable               map[string]IndexedBook
 	hasAuthorMapping        bool
 }
 
@@ -33,27 +38,76 @@ func NewBookIndex(books []IndexedBook, hasAuthorMapping bool) *BookIndex {
 		byASIN:                  make(map[string][]IndexedBook),
 		byNormalizedTitleAuthor: make(map[titleAuthorKey][]IndexedBook),
 		byNormalizedTitle:       make(map[string][]IndexedBook),
+		adoptable:               make(map[string]IndexedBook),
 		hasAuthorMapping:        hasAuthorMapping,
 	}
 	for _, b := range books {
-		if b.KindleID != "" {
-			ix.byKindleID[b.KindleID] = append(ix.byKindleID[b.KindleID], b)
-			continue
-		}
-		if b.ASIN != "" {
-			ix.byASIN[b.ASIN] = append(ix.byASIN[b.ASIN], b)
-		}
-		title := domain.NormalizeForMatch(b.Title)
-		if title == "" {
-			continue
-		}
-		ix.byNormalizedTitle[title] = append(ix.byNormalizedTitle[title], b)
-		if author := ix.normalizedAuthor(b.Author); author != "" {
-			key := titleAuthorKey{title: title, author: author}
-			ix.byNormalizedTitleAuthor[key] = append(ix.byNormalizedTitleAuthor[key], b)
-		}
+		ix.add(b)
 	}
 	return ix
+}
+
+func (ix *BookIndex) add(b IndexedBook) {
+	if b.KindleID != "" {
+		ix.byKindleID[b.KindleID] = append(ix.byKindleID[b.KindleID], b)
+		return
+	}
+	ix.adoptable[b.Remote.ID] = b
+	if b.ASIN != "" {
+		ix.byASIN[b.ASIN] = append(ix.byASIN[b.ASIN], b)
+	}
+	title := domain.NormalizeForMatch(b.Title)
+	if title == "" {
+		return
+	}
+	ix.byNormalizedTitle[title] = append(ix.byNormalizedTitle[title], b)
+	if author := ix.normalizedAuthor(b.Author); author != "" {
+		key := titleAuthorKey{title: title, author: author}
+		ix.byNormalizedTitleAuthor[key] = append(ix.byNormalizedTitleAuthor[key], b)
+	}
+}
+
+func (ix *BookIndex) remove(b IndexedBook) {
+	if b.ASIN != "" {
+		removeCandidate(ix.byASIN, b.ASIN, b.Remote.ID)
+	}
+	title := domain.NormalizeForMatch(b.Title)
+	if title != "" {
+		removeCandidate(ix.byNormalizedTitle, title, b.Remote.ID)
+		if author := ix.normalizedAuthor(b.Author); author != "" {
+			removeCandidate(ix.byNormalizedTitleAuthor, titleAuthorKey{title: title, author: author}, b.Remote.ID)
+		}
+	}
+	delete(ix.adoptable, b.Remote.ID)
+}
+
+func removeCandidate[K comparable](index map[K][]IndexedBook, key K, id string) {
+	candidates := slices.DeleteFunc(index[key], func(b IndexedBook) bool {
+		return b.Remote.ID == id
+	})
+	if len(candidates) == 0 {
+		delete(index, key)
+		return
+	}
+	index[key] = candidates
+}
+
+// AddCreated は作成したページを、Kindle ID Property に bookID が入ったページとして index に足す。
+// Match が none の Book にだけ使う。同じ Book ID を 2 回足すとその Book ID の照合は ambiguous になる。
+func (ix *BookIndex) AddCreated(remote RemoteBook, bookID string) {
+	ix.add(IndexedBook{Remote: remote, KindleID: bookID})
+}
+
+// Adopt は Adopt 候補のページを Kindle ID Property に bookID が入ったものとして index に反映する。
+// そのページは ASIN / Title+Author / Title の候補から外れ、以後 bookID の Book とだけ exact で一致する。
+func (ix *BookIndex) Adopt(remote RemoteBook, bookID string) {
+	b, ok := ix.adoptable[remote.ID]
+	if ok {
+		ix.remove(b)
+	}
+	b.Remote = remote
+	b.KindleID = bookID
+	ix.add(b)
 }
 
 // Match は §9 の順（Kindle ID → ASIN → Title+Author → Title だけ）で book を照合する。
