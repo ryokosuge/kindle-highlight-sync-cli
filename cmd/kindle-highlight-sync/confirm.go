@@ -24,13 +24,10 @@ func confirmInitialSync(p *prompter, s syncengine.Summary, interactive, yes bool
 		return err
 	}
 	line, err := p.readLine()
-	if err != nil {
-		if errors.Is(err, io.ErrUnexpectedEOF) {
-			return exitcode.New(exitcode.ConfigRequired, errors.New("initial sync was not confirmed"))
-		}
+	if err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return err
 	}
-	if answer := strings.ToLower(line); answer == "y" || answer == "yes" {
+	if answer := strings.ToLower(line); err == nil && (answer == "y" || answer == "yes") {
 		return nil
 	}
 	return exitcode.New(exitcode.ConfigRequired, errors.New("initial sync was not confirmed"))
