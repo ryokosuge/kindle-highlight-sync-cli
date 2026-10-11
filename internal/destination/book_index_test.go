@@ -422,3 +422,127 @@ func TestBookIndexMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestBookIndexLookup(t *testing.T) {
+	book := kindleBook(testASIN, "Go", "Alan")
+	tests := []struct {
+		name   string
+		pages  []IndexedBook
+		update func(ix *BookIndex)
+		remote RemoteBook
+		want   IndexedBook
+		wantOK bool
+	}{
+		{
+			name:   "Adopt の候補のページを ID で引ける",
+			pages:  []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			remote: RemoteBook{ID: "page-asin"},
+			want:   page("page-asin", "", testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:   "Kindle ID Property が入っているページも ID で引ける",
+			pages:  []IndexedBook{page("page-kindle", testASIN, "", "Other", "Other")},
+			remote: RemoteBook{ID: "page-kindle"},
+			want:   page("page-kindle", testASIN, "", "Other", "Other"),
+			wantOK: true,
+		},
+		{
+			name:   "index に無いページは ok が false",
+			pages:  []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			remote: RemoteBook{ID: "page-missing"},
+			wantOK: false,
+		},
+		{
+			name:  "作成したページは Kindle ID Property に Book ID が入った値で引ける",
+			pages: []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.AddCreated(RemoteBook{ID: "page-created"}, book.ID)
+			},
+			remote: RemoteBook{ID: "page-created"},
+			want:   page("page-created", book.ID, "", "", ""),
+			wantOK: true,
+		},
+		{
+			name:  "Adopt したページは Kindle ID Property に Book ID が入り、他の値はそのまま",
+			pages: []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-asin"}, book.ID)
+			},
+			remote: RemoteBook{ID: "page-asin"},
+			want:   page("page-asin", book.ID, testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:  "Update で書いた author / asin が入り、nil の Property は変わらない",
+			pages: []IndexedBook{page("page-title", "", "", "Go", " ")},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, book.ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+					ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			remote: RemoteBook{ID: "page-title"},
+			want:   page("page-title", book.ID, testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:  "Update で ASIN だけ書くと author は変わらない",
+			pages: []IndexedBook{page("page-title", "", "", "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, book.ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					ASIN: &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			remote: RemoteBook{ID: "page-title"},
+			want:   page("page-title", book.ID, testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:  "index に無いページへの Update は何もしない",
+			pages: []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.Update(RemoteBook{ID: "page-missing"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+				})
+			},
+			remote: RemoteBook{ID: "page-missing"},
+			wantOK: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ix := NewBookIndex(tt.pages, true)
+			if tt.update != nil {
+				tt.update(ix)
+			}
+			got, ok := ix.Lookup(tt.remote)
+			if ok != tt.wantOK {
+				t.Errorf("Lookup() ok = %t, want %t", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Errorf("Lookup() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBookIndexUpdateKeepsMatch は Update のあとも Kindle ID Property の照合が exact のままで、他の Book の候補に戻らないことを確かめる。
+func TestBookIndexUpdateKeepsMatch(t *testing.T) {
+	book := kindleBook(testASIN, "Go", "Alan")
+	ix := NewBookIndex([]IndexedBook{page("page-title", "", "", "Go", "")}, true)
+	ix.Adopt(RemoteBook{ID: "page-title"}, book.ID)
+	ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+		Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+		ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+	})
+
+	if got := ix.Match(book); got.Status != BookMatchExact || got.Book == nil || got.Book.ID != "page-title" {
+		t.Errorf("Match(book) = %+v, want exact page-title", got)
+	}
+	if got := ix.Match(kindleBook("", "Go", "Alan")); got.Status != BookMatchNone {
+		t.Errorf("Match(other book with the same Title+Author).Status = %q, want %q", got.Status, BookMatchNone)
+	}
+}

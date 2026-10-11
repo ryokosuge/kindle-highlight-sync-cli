@@ -191,27 +191,106 @@ func TestNotionDestinationCreateBook(t *testing.T) {
 }
 
 func TestNotionDestinationAdoptBook(t *testing.T) {
-	book := kindleBook(testOtherASIN, "ASIN Page", "Alan")
-	d, requests := newWriteDestination(t, writeMapping,
-		queryReply("", bookPage("page-asin", "", testOtherASIN, "Other Title", "Other Author")),
-		notionReply{body: adoptedPageResponse},
-	)
-
-	match, err := d.FindBook(context.Background(), book)
-	if err != nil {
-		t.Fatalf("FindBook() error = %v", err)
+	// 既存ページの author / asin が埋まっているかで body が変わる。title は Kindle とページで違えても書かない
+	fullBook := kindleBook(testOtherASIN, "Kindle Title", "Alan")
+	fullBook.LastAnnotatedAt = &annotatedAt
+	tests := []struct {
+		name           string
+		mapping        config.Mapping
+		page           string // Adopt するページ（ID は page-asin）
+		book           domain.Book
+		wantProperties map[string]any
+		wantIndexed    IndexedBook // Adopt のあと index が返す今の値
+	}{
+		{
+			name:    "author / asin が空のページには Kindle の値を書き、last_annotated_at を日付だけの date で書き、title は書かない",
+			mapping: writeMapping,
+			page:    bookPage("page-asin", "", "", "Notion Title", ""),
+			book:    fullBook,
+			wantProperties: map[string]any{
+				kindleIDPropertyID:        wantRichText(testOtherASIN),
+				authorPropertyID:          wantRichText("Alan"),
+				asinPropertyID:            wantRichText(testOtherASIN),
+				lastAnnotatedAtPropertyID: wantDate("2026-10-01"),
+			},
+			wantIndexed: page("page-asin", testOtherASIN, testOtherASIN, "Notion Title", "Alan"),
+		},
+		{
+			name:    "author / asin が入っているページには Kindle の値を書かない",
+			mapping: writeMapping,
+			page:    bookPage("page-asin", "", testOtherASIN, "Notion Title", "Notion Author"),
+			book:    fullBook,
+			wantProperties: map[string]any{
+				kindleIDPropertyID:        wantRichText(testOtherASIN),
+				lastAnnotatedAtPropertyID: wantDate("2026-10-01"),
+			},
+			wantIndexed: page("page-asin", testOtherASIN, testOtherASIN, "Notion Title", "Notion Author"),
+		},
+		{
+			name:    "author / asin が空白だけのページは空として Kindle の値を書く",
+			mapping: writeMapping,
+			page:    bookPage("page-asin", "", " ", "Notion Title", "\u3000"),
+			book:    fullBook,
+			wantProperties: map[string]any{
+				kindleIDPropertyID:        wantRichText(testOtherASIN),
+				authorPropertyID:          wantRichText("Alan"),
+				asinPropertyID:            wantRichText(testOtherASIN),
+				lastAnnotatedAtPropertyID: wantDate("2026-10-01"),
+			},
+			wantIndexed: page("page-asin", testOtherASIN, testOtherASIN, "Notion Title", "Alan"),
+		},
+		{
+			name:    "Kindle の LastAnnotatedAt が無ければ last_annotated_at を書かない",
+			mapping: writeMapping,
+			page:    bookPage("page-asin", "", "", "Notion Title", ""),
+			book:    kindleBook(testOtherASIN, "Kindle Title", "Alan"),
+			wantProperties: map[string]any{
+				kindleIDPropertyID: wantRichText(testOtherASIN),
+				authorPropertyID:   wantRichText("Alan"),
+				asinPropertyID:     wantRichText(testOtherASIN),
+			},
+			wantIndexed: page("page-asin", testOtherASIN, testOtherASIN, "Notion Title", "Alan"),
+		},
+		{
+			name:    "mapping の無い author / asin / last_annotated_at は空でも書かず、Kindle ID Property には Book ID を書く",
+			mapping: config.Mapping{Title: titlePropertyID, KindleID: kindleIDPropertyID},
+			page:    bookPage("page-asin", "", "", "Notion Title", ""),
+			book:    fullBook,
+			wantProperties: map[string]any{
+				kindleIDPropertyID: wantRichText(testOtherASIN),
+			},
+			wantIndexed: page("page-asin", testOtherASIN, "", "Notion Title", ""),
+		},
+		{
+			name:    "ASIN の無い Book は Kindle ID Property に b1- の Book ID を書き、asin は書かない",
+			mapping: writeMapping,
+			page:    bookPage("page-asin", "", "", "Notion Title", ""),
+			book:    kindleBook("", "Kindle Title", "Alan"),
+			wantProperties: map[string]any{
+				kindleIDPropertyID: wantRichText(domain.NewBookID("", "Kindle Title", "Alan")),
+				authorPropertyID:   wantRichText("Alan"),
+			},
+			wantIndexed: page("page-asin", domain.NewBookID("", "Kindle Title", "Alan"), "", "Notion Title", "Alan"),
+		},
 	}
-	assertMatch(t, match, "adoptable", "page-asin")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d, requests := newWriteDestination(t, tt.mapping, queryReply("", tt.page), notionReply{body: adoptedPageResponse})
+			remote := RemoteBook{ID: "page-asin"}
 
-	if err := d.AdoptBook(context.Background(), *match.Book, book); err != nil {
-		t.Fatalf("AdoptBook() error = %v", err)
-	}
-	reqs := requests()
-	assertRequestLines(t, reqs, "POST "+testQueryPath, "PATCH "+testAdoptPagePath)
-	// Kindle ID Property にだけ Book ID を書き、title / author / asin / last_annotated_at は body に入れない
-	wantProperties := map[string]any{kindleIDPropertyID: wantRichText(testOtherASIN)}
-	if properties := decodeProperties(t, reqs[1].body, ""); !reflect.DeepEqual(properties, wantProperties) {
-		t.Errorf("body.properties = %v, want %v", properties, wantProperties)
+			if err := d.AdoptBook(context.Background(), remote, tt.book); err != nil {
+				t.Fatalf("AdoptBook() error = %v", err)
+			}
+			// Adopt 1 冊につき更新の要求は 1 回だけ
+			reqs := requests()
+			assertRequestLines(t, reqs, "POST "+testQueryPath, "PATCH "+testAdoptPagePath)
+			if properties := decodeProperties(t, reqs[1].body, ""); !reflect.DeepEqual(properties, tt.wantProperties) {
+				t.Errorf("body.properties = %v, want %v", properties, tt.wantProperties)
+			}
+			if got, ok := d.index.Lookup(remote); !ok || got != tt.wantIndexed {
+				t.Errorf("index.Lookup() = %+v, %t, want %+v, true", got, ok, tt.wantIndexed)
+			}
+		})
 	}
 }
 
