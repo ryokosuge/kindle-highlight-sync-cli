@@ -403,7 +403,7 @@ func TestInitConfigSafety(t *testing.T) {
 			input := initDatabaseRawID + "\n\n\n\n\n\n"
 			p := setupInit(t, input, initTokenValue, tt.configTOML, stub)
 			profileFile := filepath.Join(p.DataDir, "browser-profile", "keep")
-			stateFile := filepath.Join(p.DataDir, "state.db")
+			stateFile := p.StateFile()
 			if err := os.MkdirAll(filepath.Dir(profileFile), 0o700); err != nil {
 				t.Fatal(err)
 			}

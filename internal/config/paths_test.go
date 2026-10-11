@@ -100,6 +100,41 @@ func TestBrowserProfileDir(t *testing.T) {
 	}
 }
 
+func TestStateFile(t *testing.T) {
+	home := t.TempDir()
+	xdgData := t.TempDir()
+
+	tests := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "XDG_DATA_HOME が絶対パス",
+			env:  map[string]string{"XDG_DATA_HOME": xdgData},
+			want: filepath.Join(xdgData, "kindle-highlight-sync", "state.db"),
+		},
+		{
+			name: "XDG_DATA_HOME が空",
+			env:  nil,
+			want: filepath.Join(home, ".local", "share", "kindle-highlight-sync", "state.db"),
+		},
+		{
+			name: "XDG_DATA_HOME が相対パス",
+			env:  map[string]string{"XDG_DATA_HOME": "relative/data"},
+			want: filepath.Join(home, ".local", "share", "kindle-highlight-sync", "state.db"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolvePaths(envOf(tt.env), home).StateFile()
+			if got != tt.want {
+				t.Errorf("StateFile() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDefaultPaths(t *testing.T) {
 	home := t.TempDir()
 	xdgConfig := t.TempDir()
@@ -211,7 +246,7 @@ func TestEnsureDataDir(t *testing.T) {
 		if err := os.Chmod(p.DataDir, 0o755); err != nil {
 			t.Fatalf("Chmod(%q) error = %v", p.DataDir, err)
 		}
-		stateFile := filepath.Join(p.DataDir, "state.db")
+		stateFile := p.StateFile()
 		if err := os.WriteFile(stateFile, []byte("existing"), 0o600); err != nil {
 			t.Fatalf("WriteFile(%q) error = %v", stateFile, err)
 		}
