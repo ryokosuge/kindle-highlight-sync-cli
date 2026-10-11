@@ -22,13 +22,16 @@ type prompter struct {
 	out  io.Writer
 }
 
-func newPrompter(cmd *cobra.Command) *prompter {
-	in := cmd.InOrStdin()
-	var termFile *os.File
-	if f, ok := in.(*os.File); ok && term.IsTerminal(int(f.Fd())) {
-		termFile = f
+// terminalInput は cmd の入力が端末ならその *os.File を返し、端末でなければ nil を返す。
+func terminalInput(cmd *cobra.Command) *os.File {
+	if f, ok := cmd.InOrStdin().(*os.File); ok && term.IsTerminal(int(f.Fd())) {
+		return f
 	}
-	return &prompter{in: bufio.NewReader(in), term: termFile, out: cmd.ErrOrStderr()}
+	return nil
+}
+
+func newPrompter(cmd *cobra.Command) *prompter {
+	return &prompter{in: bufio.NewReader(cmd.InOrStdin()), term: terminalInput(cmd), out: cmd.ErrOrStderr()}
 }
 
 func (p *prompter) line(question string) (string, error) {
