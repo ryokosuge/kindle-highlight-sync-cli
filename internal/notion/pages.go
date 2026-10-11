@@ -112,21 +112,9 @@ func propertiesRequest(properties map[string]PropertyInput) map[string]any {
 	for id, property := range properties {
 		switch property.typ {
 		case typeTitle:
-			var title []richTextRequest
-			if property.text != "" {
-				title = []richTextRequest{newRichTextRequest(property.text)}
-			} else {
-				title = []richTextRequest{}
-			}
-			request[id] = titlePropertyRequest{Title: title}
+			request[id] = titlePropertyRequest{Title: richTextItems(property.text)}
 		case typeRichText:
-			var richText []richTextRequest
-			if property.text != "" {
-				richText = []richTextRequest{newRichTextRequest(property.text)}
-			} else {
-				richText = []richTextRequest{}
-			}
-			request[id] = richTextPropertyRequest{RichText: richText}
+			request[id] = richTextPropertyRequest{RichText: richTextItems(property.text)}
 		case typeDate:
 			var date *dateRequest
 			if property.date != "" {
@@ -138,9 +126,13 @@ func propertiesRequest(properties map[string]PropertyInput) map[string]any {
 	return request
 }
 
-func newRichTextRequest(text string) richTextRequest {
-	var request richTextRequest
-	request.Type = "text"
-	request.Text.Content = text
-	return request
+// richTextItems は text をそのまま 1 要素にする。空なら Property を空にする [] を返す。
+func richTextItems(text string) []richTextRequest {
+	if text == "" {
+		return []richTextRequest{}
+	}
+	var item richTextRequest
+	item.Type = "text"
+	item.Text.Content = text
+	return []richTextRequest{item}
 }
