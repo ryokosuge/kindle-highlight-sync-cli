@@ -54,3 +54,8 @@ func (p Paths) EnsureDataDir() error {
 func (p Paths) BrowserProfileDir() string {
 	return filepath.Join(p.DataDir, "browser-profile")
 }
+
+// StateFile は state.db の場所（<data-dir>/kindle-highlight-sync/state.db、§57）を返す。ファイルは作らない。
+func (p Paths) StateFile() string {
+	return filepath.Join(p.DataDir, "state.db")
+}
