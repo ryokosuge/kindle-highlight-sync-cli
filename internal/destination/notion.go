@@ -15,6 +15,7 @@ type pageQuerier interface {
 	ListBlockChildren(ctx context.Context, blockID string) ([]notion.Block, error)
 	CreatePage(ctx context.Context, dataSourceID string, properties map[string]notion.PropertyInput) (string, error)
 	UpdatePage(ctx context.Context, pageID string, properties map[string]notion.PropertyInput) error
+	AppendBlockChildren(ctx context.Context, blockID string, quotes []notion.QuoteBlock) ([]string, error)
 }
 
 const quoteBlockType = "quote"

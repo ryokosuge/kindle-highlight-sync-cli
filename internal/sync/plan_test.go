@@ -30,13 +30,17 @@ func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destina
 	return f.matches[book.ID], nil
 }
 
-// CreateBook / AdoptBook は Destination を満たすためだけの stub。BuildPlan は書き込まないので呼ばれない。
+// CreateBook / AdoptBook / AppendHighlights は Destination を満たすためだけの stub。BuildPlan は書き込まないので呼ばれない。
 func (f *fakeDestination) CreateBook(context.Context, domain.Book) (destination.RemoteBook, error) {
 	return destination.RemoteBook{}, nil
 }
 
 func (f *fakeDestination) AdoptBook(context.Context, destination.RemoteBook, domain.Book) error {
 	return nil
+}
+
+func (f *fakeDestination) AppendHighlights(context.Context, destination.RemoteBook, []domain.Highlight) ([]destination.RemoteHighlight, error) {
+	return nil, nil
 }
 
 func (f *fakeDestination) ListHighlightIDs(_ context.Context, remote destination.RemoteBook) (map[string]destination.RemoteHighlight, error) {
