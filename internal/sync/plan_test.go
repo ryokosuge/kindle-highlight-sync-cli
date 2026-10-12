@@ -18,10 +18,10 @@ type fakeDestination struct {
 	errs      map[string]error
 	remoteIDs map[string][]string // ページ ID ごとに ListHighlightIDs が返す Highlight ID
 	listErrs  map[string]error    // ページ ID ごとに ListHighlightIDs が返す error
-	writeErrs map[string]error    // Book ID ごとに CreateBook / AdoptBook が返す error
+	writeErrs map[string]error    // Book ID ごとに CreateBook / AdoptBook / UpdateBook が返す error
 	calls     []string
 	listCalls []string // ListHighlightIDs に渡ったページ ID の順
-	writes    []string // 呼ばれた CreateBook / AdoptBook の順（"create <Book ID>" / "adopt <ページ ID> <Book ID>"）
+	writes    []string // 呼ばれた CreateBook / AdoptBook / UpdateBook の順（"create <Book ID>" / "adopt <ページ ID> <Book ID>" / "update <ページ ID> <Book ID>"）
 }
 
 func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destination.BookMatch, error) {
@@ -51,6 +51,14 @@ func (f *fakeDestination) AdoptBook(_ context.Context, remote destination.Remote
 
 func (f *fakeDestination) AppendHighlights(context.Context, destination.RemoteBook, []domain.Highlight) ([]destination.RemoteHighlight, error) {
 	return nil, nil
+}
+
+func (f *fakeDestination) UpdateBook(_ context.Context, remote destination.RemoteBook, book domain.Book) error {
+	f.writes = append(f.writes, "update "+remote.ID+" "+book.ID)
+	if err, ok := f.writeErrs[book.ID]; ok {
+		return err
+	}
+	return nil
 }
 
 func (f *fakeDestination) ListHighlightIDs(_ context.Context, remote destination.RemoteBook) (map[string]destination.RemoteHighlight, error) {
