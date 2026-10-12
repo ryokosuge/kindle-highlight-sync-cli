@@ -102,6 +102,39 @@ func TestAppendBlockChildren(t *testing.T) {
 	}
 }
 
+// TestAppendBodySize は AppendBodySize が AppendBlockChildren の実際の body の大きさと一致することを確かめる。
+func TestAppendBodySize(t *testing.T) {
+	tests := []struct {
+		name   string
+		quotes []QuoteBlock
+	}{
+		{name: "空", quotes: nil},
+		{name: "Quote Block", quotes: quoteBlocks(3)},
+		{
+			name: "子の paragraph と非 ASCII の本文",
+			quotes: []QuoteBlock{{
+				RichText: []RichText{{Content: "本文"}, {Content: strings.Repeat("a", 1000)}},
+				Children: []ParagraphBlock{{RichText: []RichText{{Content: "Note"}}}},
+			}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, requests := newQueryTestClient(t, queryReply{body: appendBlockReply(len(tt.quotes))})
+			if _, err := client.AppendBlockChildren(context.Background(), "page-1", tt.quotes); err != nil {
+				t.Fatalf("AppendBlockChildren() error = %v", err)
+			}
+			records := requests()
+			if len(records) != 1 {
+				t.Fatalf("requests = %d, want 1", len(records))
+			}
+			if got := AppendBodySize(tt.quotes); got != records[0].size {
+				t.Errorf("AppendBodySize() = %d, want %d (sent body)", got, records[0].size)
+			}
+		})
+	}
+}
+
 func TestAppendBlockChildrenPath(t *testing.T) {
 	tests := []struct {
 		name string

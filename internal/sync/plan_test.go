@@ -49,6 +49,10 @@ func (f *fakeDestination) AdoptBook(_ context.Context, remote destination.Remote
 	return nil
 }
 
+func (f *fakeDestination) AppendHighlights(context.Context, destination.RemoteBook, []domain.Highlight) ([]destination.RemoteHighlight, error) {
+	return nil, nil
+}
+
 func (f *fakeDestination) ListHighlightIDs(_ context.Context, remote destination.RemoteBook) (map[string]destination.RemoteHighlight, error) {
 	f.listCalls = append(f.listCalls, remote.ID)
 	if err, ok := f.listErrs[remote.ID]; ok {

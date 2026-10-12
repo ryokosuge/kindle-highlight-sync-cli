@@ -66,15 +66,29 @@ func (c *Client) AppendBlockChildren(ctx context.Context, blockID string, quotes
 	if len(quotes) > maxAppendChildren {
 		return nil, c.notionError(http.MethodPatch, path, fmt.Errorf("children must be at most %d blocks, got %d", maxAppendChildren, len(quotes)))
 	}
+	var response appendBlockChildrenResponse
+	if err := c.doOnce(ctx, http.MethodPatch, path, newAppendBlockChildrenRequest(quotes), &response); err != nil {
+		return nil, err
+	}
+	return c.readAppendBlockChildrenResponse(path, &response, len(quotes))
+}
+
+func newAppendBlockChildrenRequest(quotes []QuoteBlock) appendBlockChildrenRequest {
 	request := appendBlockChildrenRequest{Children: make([]blockRequest, 0, len(quotes))}
 	for _, quote := range quotes {
 		request.Children = append(request.Children, quoteBlockRequest(quote))
 	}
-	var response appendBlockChildrenResponse
-	if err := c.doOnce(ctx, http.MethodPatch, path, request, &response); err != nil {
-		return nil, err
+	return request
+}
+
+// AppendBodySize は AppendBlockChildren が quotes に対して送る request body の大きさ（バイト数）。
+// 呼び出し側が body の上限（500KB）に収まる単位を測るのに使う。
+func AppendBodySize(quotes []QuoteBlock) int {
+	body, err := json.Marshal(newAppendBlockChildrenRequest(quotes))
+	if err != nil {
+		return 0
 	}
-	return c.readAppendBlockChildrenResponse(path, &response, len(quotes))
+	return len(body)
 }
 
 // readAppendBlockChildrenResponse は応答を検証し、作られた block の ID を results の順で返す。
