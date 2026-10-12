@@ -69,7 +69,7 @@ func TestSyncApply(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 0 and empty", code, stderr)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "0", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "1", "3", "0", "0"), "3", "3"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		for _, secret := range []string{"Distinctive", testDryRunToken} {
@@ -102,7 +102,7 @@ func TestSyncApply(t *testing.T) {
 		if want := "partial failure: sync: 1 books were not synced: " + dryRunBookAmbiguous.ID + " (ambiguous)\n"; code != 8 || stderr != want {
 			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "1", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "1", "3", "1", "0"), "4", "4"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		// 書き込みは none と adoptable の Book の 2 回だけで、ambiguous の Book の分は無い
@@ -139,7 +139,7 @@ func TestSyncApply(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Errorf("2nd run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
 		}
-		if got, want := planCells(t, stdout), applyCells("0", "0", "0", "0", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("0", "0", "0", "0", "0"), "3", "3"); !reflect.DeepEqual(got, want) {
 			t.Errorf("2nd stdout cells = %q, want %q", got, want)
 		}
 		// POST /v1/pages は届かず、exact になった 3 冊のページに PATCH が 1 回ずつ届く
@@ -207,7 +207,7 @@ func TestSyncApply(t *testing.T) {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
 		// exact の 1 件は追記できている
-		if got, want := planCells(t, stdout), applyCells("1", "1", "2", "0", "1"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "1", "2", "0", "1"), "3", "3"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		for _, secret := range []string{"Distinctive", testDryRunToken} {
@@ -228,7 +228,7 @@ func TestSyncApply(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "0", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "1", "3", "0", "0"), "3", "3"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		// 予定の算出も確認も行わず、照合の query のあとに書き込む
@@ -246,7 +246,7 @@ func TestSyncApply(t *testing.T) {
 		if want := "source format error: sync: highlights of 1 of 5 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n"; code != 7 || stderr != want {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 7 and %q", code, stderr, want)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "1", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "1", "3", "1", "0"), "5", "5"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		if got, want := writeRequests(requests()), []string{"PATCH " + applyExactPath, "POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
@@ -298,7 +298,7 @@ func TestSyncApply(t *testing.T) {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 4 with a Notion error", code, stderr)
 		}
 		// none の Book の作成までは済んでいる
-		if got, want := planCells(t, stdout), applyCells("1", "0", "2", "0", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "0", "2", "0", "0"), "3", "3"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		for _, secret := range []string{"Distinctive", testDryRunToken} {
