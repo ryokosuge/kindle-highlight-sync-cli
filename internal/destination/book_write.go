@@ -68,6 +68,7 @@ func (d *NotionDestination) createProperties(book domain.Book) map[string]notion
 
 // propertyInputs は PlanBookProperties の結果を Property ID を key にした更新の body にする。nil の Property は入れない。
 // 値は空のときに Property を消す（rich_text の [] / date の null）ので、空の値は PlanBookProperties の側で nil にしてある前提。
+// mapping の Property ID は項目ごとに異なる前提で書く。重複は config の読み込み側で弾く（別 Task で扱う）。
 func propertyInputs(values BookPropertyValues) map[string]notion.PropertyInput {
 	properties := make(map[string]notion.PropertyInput)
 	if values.Author != nil {
