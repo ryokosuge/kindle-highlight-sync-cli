@@ -721,6 +721,15 @@ func TestApplyBooksState(t *testing.T) {
 			wantCode: 6,
 		},
 		{
+			name:         "State の読み取りがキャンセルで失敗したら exitcode.LocalState に変えず、残りの Book を書かずに中断の error を返す",
+			books:        applyBooks[1:3],
+			canceled:     true,
+			listErrs:     map[string]error{"book-adopt": exitcode.New(exitcode.LocalState, fmt.Errorf("state: begin: %w", context.Canceled))},
+			want:         ApplyResult{Adopted: []string{"book-adopt"}},
+			wantCanceled: true,
+			wantCode:     1,
+		},
+		{
 			name:        "State の保存が失敗したら、残りの Book を書かずに exitcode.LocalState の error を返す",
 			books:       applyBooks[:3],
 			saveErr:     errors.New("state: commit"),

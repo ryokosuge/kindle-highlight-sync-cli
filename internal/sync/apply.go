@@ -200,7 +200,14 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 }
 
 // localStateError は State の失敗を exitcode.LocalState（6）の error にする。すでに LocalState ならそのまま返す。
+// context のキャンセル・期限切れによる失敗は State の不整合ではなく中断なので、LocalState に変えず、種類を持たない中断の error にして返す
+// （SQLite の State は中断も LocalState で包んで返す。中断時の exit code は呼び出し側が決める）。
 func localStateError(op, bookID string, err error) error {
+	for _, interrupted := range []error{context.Canceled, context.DeadlineExceeded} {
+		if errors.Is(err, interrupted) {
+			return fmt.Errorf("sync: %s %s: %w", op, bookID, interrupted)
+		}
+	}
 	if exitcode.Code(err) == int(exitcode.LocalState) {
 		return err
 	}
