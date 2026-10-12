@@ -56,3 +56,10 @@ func writeApplyResult(w io.Writer, r syncengine.ApplyResult) error {
 	_, err := w.Write(buf.Bytes())
 	return err
 }
+
+// writeTargetCount は sync の対象になった Book の数と全 Book の数を w に書く（§53）。
+// stdout は redact を通さないので件数だけを出す（§74）。
+func writeTargetCount(w io.Writer, targets, total int) error {
+	_, err := fmt.Fprintf(w, "Target books  %d of %d\n", targets, total)
+	return err
+}

@@ -205,3 +205,8 @@ func TestWriteApplyResult(t *testing.T) {
 		}
 	})
 }
+
+// withTargetCount は cells の末尾に writeTargetCount が出す「対象の数 of 全 Book の数」の行を足す。
+func withTargetCount(cells [][]string, targets, total string) [][]string {
+	return append(cells, []string{"Target books", targets + " of " + total})
+}

@@ -22,6 +22,7 @@ type app struct {
 	paths  config.Paths
 	config *config.Config   // config.toml が無ければ nil
 	dryRun bool             // sync --dry-run。Notion と State を書かずに予定だけを出す（§63）
+	full   bool             // sync --full。State の books の記録に関わらず全 Book を対象にする（§54）
 	yes    bool             // sync --yes。Initial Sync の Create / Adopt の確認を省く（§70）
 	out    io.Writer        // 予定の表の出力先（sync の RunE で cmd.OutOrStdout() を入れる）
 	prompt *prompter        // Initial Sync の確認の入出力（sync の RunE で newSyncPrompter(cmd) を入れる）

@@ -118,8 +118,14 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if err != nil {
 		return err
 	}
+	// 対象の選択は dry-run の分岐と ASIN の無い Book の除外より前に 1 回だけ行う（§53 / §54）。照合（FindBook）が対象外の Book まで走らないようにする
+	total := len(books)
+	books, err = selectTargets(ctx, a, books)
+	if err != nil {
+		return err
+	}
 	if a.dryRun {
-		return writeDryRunPlan(ctx, a, books, b)
+		return writeDryRunPlan(ctx, a, books, total, b)
 	}
 	_, synced, err := a.store.InitialSyncCompletedAt(ctx)
 	if err != nil {
@@ -140,7 +146,7 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// ページが決まった Book には既知を除いた Highlight を追記する（§51 / §24）。Highlight は ApplyBooks が Book ごとに取る。
 	// 取得の失敗の仕分けは ApplyBooks に任せる。1 冊だけの構造の異常とタイムアウトは Failed に載って続き、
 	// 全 Book に共通の枠の異常（§73）・ブラウザの失敗・ctx の取消・ローカル状態の不整合は種類を変えずにここへ返る
-	applied, noASIN, err := applyBooks(ctx, a, books, b, startedAt)
+	applied, noASIN, err := applyBooks(ctx, a, books, total, b, startedAt)
 	if err != nil {
 		return err
 	}
@@ -164,10 +170,24 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	return applied.PartialFailure()
 }
 
-// applyBooks は ASIN の無い Book を失敗に数えて除き、残りの Book ごとに作成・Adopt・追記を実行し、件数を a.out に出す。
+// selectTargets は State の books の last_synced_at から、この run で同期する Book を選ぶ。--full なら全 Book を返す。
+// State は読むだけで、state.db が無ければ作らない。読めなければ exitcode.LocalState（6）で包まれた失敗を返す。
+func selectTargets(ctx context.Context, a *app, books []domain.Book) ([]domain.Book, error) {
+	recorded, err := a.store.ListBooks(ctx)
+	if err != nil {
+		return nil, err
+	}
+	lastSynced := make(map[string]time.Time, len(recorded))
+	for id, b := range recorded {
+		lastSynced[id] = b.LastSyncedAt
+	}
+	return syncengine.SelectTargets(books, lastSynced, a.full), nil
+}
+
+// applyBooks は ASIN の無い Book を失敗に数えて除き、残りの Book ごとに作成・Adopt・追記を実行し、件数と対象の数（books の数と全 Book の数 total）を a.out に出す。
 // 同期先の組み立て（exit 3）と照合・書き込みの fatal な失敗（exit 4）、全 Book に共通の取得の失敗は種類を変えずに返す。
 // skip・Book 単位の失敗は結果に残し、呼び出し側が exit 7 / exit 8 に仕分ける。
-func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser, startedAt time.Time) (syncengine.ApplyResult, []bookFailure, error) {
+func applyBooks(ctx context.Context, a *app, books []domain.Book, total int, src browser, startedAt time.Time) (syncengine.ApplyResult, []bookFailure, error) {
 	dst, err := newDestination(a)
 	if err != nil {
 		return syncengine.ApplyResult{}, nil, err
@@ -187,18 +207,24 @@ func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser, s
 	if werr := writeApplyResult(a.out, result); err == nil {
 		err = werr
 	}
+	if werr := writeTargetCount(a.out, len(books), total); err == nil {
+		err = werr
+	}
 	return result, noASIN, err
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。
 // 予定を組めなければ（exit 3 / exit 4）種類を変えずに返して表は出さない。ASIN の無い Book があれば、
 // 残りの Book の予定を出したあとに SourceFormat（exit 7）で終わる（§72）。
-func writeDryRunPlan(ctx context.Context, a *app, books []domain.Book, src browser) error {
+func writeDryRunPlan(ctx context.Context, a *app, books []domain.Book, total int, src browser) error {
 	plan, failed, err := buildSyncPlan(ctx, a, books, src)
 	if err != nil {
 		return err
 	}
 	if err := writePlan(a.out, plan); err != nil {
+		return err
+	}
+	if err := writeTargetCount(a.out, len(books), total); err != nil {
 		return err
 	}
 	if len(failed) > 0 {
@@ -246,6 +272,7 @@ func newSyncCmd(a *app) *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&headed, "headed", false, "画面付きの Chrome で同期する（既定は headless）")
 	cmd.Flags().BoolVar(&a.dryRun, "dry-run", false, "Notion と State を変えずに、Book の照合の結果と追記する Highlight の数だけを出す")
+	cmd.Flags().BoolVar(&a.full, "full", false, "State の記録に関わらず全 Book の Highlight を取って同期する（既定は変化のある Book と未同期の Book だけ）")
 	cmd.Flags().BoolVar(&a.yes, "yes", false, "Initial Sync の Create / Adopt の確認を省く（入力が端末でないときに要る）")
 	return cmd
 }

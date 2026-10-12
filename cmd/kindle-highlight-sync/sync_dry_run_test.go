@@ -223,6 +223,7 @@ func TestSyncDryRun(t *testing.T) {
 			{"New books", "1"},
 			{"Ambiguous", "1"},
 			{"Highlights to append", "2"}, // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
+			{"Target books", "3 of 3"},
 		}
 		got := planCells(t, stdout)
 		if !reflect.DeepEqual(got, want) {
@@ -245,7 +246,7 @@ func TestSyncDryRun(t *testing.T) {
 	})
 
 	t.Run("ASIN の無い Book は Highlight を取らずに失敗として数え、残りの Book の予定を出して exit 7 で終わる", func(t *testing.T) {
-		summary := func(exact, newBooks, highlights string) [][]string {
+		summary := func(exact, newBooks, highlights, targets string) [][]string {
 			return [][]string{
 				{},
 				{"Exact matches", exact},
@@ -253,6 +254,7 @@ func TestSyncDryRun(t *testing.T) {
 				{"New books", newBooks},
 				{"Ambiguous", "0"},
 				{"Highlights to append", highlights},
+				{"Target books", targets},
 			}
 		}
 		header := []string{"Kindle Book", "Match Status", "Matched Notion Page", "Action", "Highlights to append"}
@@ -272,7 +274,7 @@ func TestSyncDryRun(t *testing.T) {
 					header,
 					{dryRunBookExact.Title, "exact", "page-exact", "append", "1"},
 					{dryRunBookNew.Title, "none", "-", "create + append", "1"},
-				}, summary("1", "1", "2")...), // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
+				}, summary("1", "1", "2", "3 of 3")...), // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
 				wantHLBooks:  []domain.Book{dryRunBookExact, dryRunBookNew},
 				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
 				wantRequests: []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath},
@@ -280,7 +282,7 @@ func TestSyncDryRun(t *testing.T) {
 			{
 				name:         "ASIN の無い Book だけ",
 				books:        []domain.Book{dryRunBookNoASIN},
-				wantCells:    append([][]string{header}, summary("0", "0", "0")...),
+				wantCells:    append([][]string{header}, summary("0", "0", "0", "1 of 1")...),
 				wantHLBooks:  nil,
 				wantStderr:   "source format error: sync: highlights of 1 of 1 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
 				wantRequests: nil,

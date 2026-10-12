@@ -26,6 +26,7 @@ const (
 	wantSyncShort         = "Kindle の Highlight と Note を Notion に同期する"
 	wantSyncHeadedUsage   = "画面付きの Chrome で同期する（既定は headless）"
 	wantSyncDryRunUsage   = "Notion と State を変えずに、Book の照合の結果と追記する Highlight の数だけを出す"
+	wantSyncFullUsage     = "State の記録に関わらず全 Book の Highlight を取って同期する（既定は変化のある Book と未同期の Book だけ）"
 	wantSyncYesUsage      = "Initial Sync の Create / Adopt の確認を省く（入力が端末でないときに要る）"
 	wantAlreadyRunningErr = "already running: another kindle-highlight-sync process is running\n"
 )
@@ -145,7 +146,7 @@ func TestSync(t *testing.T) {
 
 				var stdout, stderr bytes.Buffer
 				code := run(tt.args, &stdout, &stderr)
-				if got, want := planCells(t, stdout.String()), applyCells("0", "0", "0", "0", "0"); !reflect.DeepEqual(got, want) {
+				if got, want := planCells(t, stdout.String()), withTargetCount(applyCells("0", "0", "0", "0", "0"), "0", "0"); !reflect.DeepEqual(got, want) {
 					t.Errorf("run(%v) stdout cells = %q, want %q", tt.args, got, want)
 				}
 				assertSyncSucceeded(t, code, stderr.String(), filepath.Join(p.DataDir, "run.lock"))
@@ -728,7 +729,7 @@ func TestSync(t *testing.T) {
 		if code := run([]string{"sync", "--help"}, &stdout, &stderr); code != 0 {
 			t.Errorf("run(sync --help) code = %d, stderr = %q, want 0", code, stderr.String())
 		}
-		for flag, usage := range map[string]string{"--headed": wantSyncHeadedUsage, "--dry-run": wantSyncDryRunUsage, "--yes": wantSyncYesUsage} {
+		for flag, usage := range map[string]string{"--headed": wantSyncHeadedUsage, "--full": wantSyncFullUsage, "--dry-run": wantSyncDryRunUsage, "--yes": wantSyncYesUsage} {
 			var found bool
 			for line := range strings.Lines(stdout.String()) {
 				if strings.Contains(line, flag) && strings.Contains(line, usage) {

@@ -85,24 +85,24 @@ func TestSyncDedup(t *testing.T) {
 		{
 			name: "通常の sync は追記した Highlight を Block ID 付きで state.db の highlights に残す",
 			runs: []dedupRun{
-				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+				{wantCells: withTargetCount(applyCells("0", "0", "3", "0", "0"), "3", "3"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
 			},
 			wantSaved: dedupSavedAfterFirstRun(),
 		},
 		{
 			name: "同じ Kindle の内容で続けて sync すると、2 回目は追記の要求を出さず追記件数が 0 になる",
 			runs: []dedupRun{
-				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+				{wantCells: withTargetCount(applyCells("0", "0", "3", "0", "0"), "3", "3"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
 				// State の既知で足りるので、子 block の一覧も読まない
-				{wantCells: applyCells("0", "0", "0", "0", "0"), wantNoGetChildren: true},
+				{wantCells: withTargetCount(applyCells("0", "0", "0", "0", "0"), "3", "3"), wantNoGetChildren: true},
 			},
 			wantSaved: dedupSavedAfterFirstRun(),
 		},
 		{
 			name: "2 回目の前に Kindle の Highlight が 1 つ増えると、2 回目はその 1 つだけを追記する",
 			runs: []dedupRun{
-				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
-				{extraHighlight: true, wantCells: applyCells("0", "0", "1", "0", "0"), wantAppends: []string{"PATCH " + testInitialAdoptBlocksPath}},
+				{wantCells: withTargetCount(applyCells("0", "0", "3", "0", "0"), "3", "3"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+				{extraHighlight: true, wantCells: withTargetCount(applyCells("0", "0", "1", "0", "0"), "3", "3"), wantAppends: []string{"PATCH " + testInitialAdoptBlocksPath}},
 			},
 			wantSaved: func() map[string]string {
 				saved := dedupSavedAfterFirstRun()
@@ -113,8 +113,8 @@ func TestSyncDedup(t *testing.T) {
 		{
 			name: "state.db を消して続けて sync しても追記は 0 回で、Notion の既知を state.db に保存し直す",
 			runs: []dedupRun{
-				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
-				{removeState: true, wantCells: applyCells("0", "0", "0", "0", "0")},
+				{wantCells: withTargetCount(applyCells("0", "0", "3", "0", "0"), "3", "3"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+				{removeState: true, wantCells: withTargetCount(applyCells("0", "0", "0", "0", "0"), "3", "3")},
 			},
 			wantSaved: dedupSavedAfterFirstRun(),
 		},
