@@ -3,8 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"maps"
+	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"testing"
 
@@ -13,11 +14,21 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/state"
 )
 
-// dedupBooksByPath は dedupReplies の 3 冊を、ページの子 block を読む path で引く。
-var dedupBooksByPath = map[string]domain.Book{
-	testDryRunBlocksPath:       dryRunBookExact,
-	testCreatedBlocksPath:      dryRunBookNew,
-	testInitialAdoptBlocksPath: initialBookAdopt,
+// dedupBookIDs は newInitialBrowser の 3 冊の Book ID。
+var dedupBookIDs = []string{dryRunBookExact.ID, dryRunBookNew.ID, initialBookAdopt.ID}
+
+// dedupHighlight6 は 2 回目の前に Kindle で増える Highlight。
+var dedupHighlight6 = domain.Highlight{ID: "a-HIGHLIGHT-6", BookID: initialBookAdopt.ID, Text: "Distinctive Highlight Six"}
+
+// dedupSavedAfterFirstRun は 1 回目の sync のあとの highlights（Highlight ID → Block ID）。
+// exact の a-HIGHLIGHT-1 は Notion の既知として読んだ block、ほかは fake の Notion が追記で返した block。
+func dedupSavedAfterFirstRun() map[string]string {
+	return map[string]string{
+		"a-HIGHLIGHT-1": "block-1",
+		"a-NOTE-2":      "appended-1",
+		"a-HIGHLIGHT-3": "appended-1",
+		"a-HIGHLIGHT-5": "appended-1",
+	}
 }
 
 // dedupReplies は 3 冊とも exact と照合され、子 block が空（exact は 1 件目の Sync Marker だけ）の Notion の応答。
@@ -36,161 +47,138 @@ func dedupReplies() map[string]string {
 	return replies
 }
 
-// savedHighlights は state.db の highlights を Book ID ごとに返す。
-func savedHighlights(t *testing.T, p config.Paths) map[string]map[string]state.HighlightState {
+// savedBlockIDs は state.db の highlights を Highlight ID → Block ID で返す（Book をまたぐ読み取り順に依存しない）。
+func savedBlockIDs(t *testing.T, p config.Paths) map[string]string {
 	t.Helper()
 	s := state.NewSQLiteStateStore(p.StateFile())
-	got := map[string]map[string]state.HighlightState{}
-	for _, b := range dedupBooksByPath {
-		states, err := s.ListHighlightIDs(context.Background(), b.ID)
+	got := map[string]string{}
+	for _, bookID := range dedupBookIDs {
+		states, err := s.ListHighlightIDs(context.Background(), bookID)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("ListHighlightIDs(%s) error = %v, want nil", bookID, err)
 		}
-		got[b.ID] = states
+		for id, h := range states {
+			got[id] = h.DestinationHighlightID
+		}
 	}
 	return got
 }
 
-// highlightIDs は states の KindleHighlightID を昇順で返す。
-func highlightIDs(states map[string]state.HighlightState) []string {
-	return slices.Sorted(maps.Keys(states))
-}
-
 func TestSyncDedup(t *testing.T) {
-	// 1 回目の sync のあとの State が、追記した Highlight と Notion の既知を Block ID 付きで持つこと
-	wantSavedIDs := map[string][]string{
-		dryRunBookExact.ID:  {"a-HIGHLIGHT-1", "a-NOTE-2"},
-		dryRunBookNew.ID:    {"a-HIGHLIGHT-3"},
-		initialBookAdopt.ID: {"a-HIGHLIGHT-5"},
+	// dedupRun は 1 回の sync の実行と、その結果の期待値。
+	type dedupRun struct {
+		args              []string
+		extraHighlight    bool       // true なら実行前に Kindle の adoptable の Book に Highlight を 1 つ足す
+		removeState       bool       // true なら実行前に state.db を消す
+		wantCells         [][]string // nil なら標準出力の件数は見ない（dry-run）
+		wantAppends       []string
+		wantNoGetChildren bool // true なら子 block の一覧を読む GET が無い
 	}
-	assertSaved := func(t *testing.T, p config.Paths) {
-		t.Helper()
-		got := savedHighlights(t, p)
-		for bookID, want := range wantSavedIDs {
-			if ids := highlightIDs(got[bookID]); !slices.Equal(ids, want) {
-				t.Errorf("saved highlight IDs of %s = %v, want %v", bookID, ids, want)
+	tests := []struct {
+		name string
+		// true なら Initial Sync 済みの state.db を作らず、state.db が無い状態から始める
+		noState bool
+		runs    []dedupRun
+		// 全 run のあとの highlights（Highlight ID → Block ID）。nil なら state.db が無い
+		wantSaved map[string]string
+	}{
+		{
+			name: "通常の sync は追記した Highlight を Block ID 付きで state.db の highlights に残す",
+			runs: []dedupRun{
+				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+			},
+			wantSaved: dedupSavedAfterFirstRun(),
+		},
+		{
+			name: "同じ Kindle の内容で続けて sync すると、2 回目は追記の要求を出さず追記件数が 0 になる",
+			runs: []dedupRun{
+				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+				// State の既知で足りるので、子 block の一覧も読まない
+				{wantCells: applyCells("0", "0", "0", "0", "0"), wantNoGetChildren: true},
+			},
+			wantSaved: dedupSavedAfterFirstRun(),
+		},
+		{
+			name: "2 回目の前に Kindle の Highlight が 1 つ増えると、2 回目はその 1 つだけを追記する",
+			runs: []dedupRun{
+				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+				{extraHighlight: true, wantCells: applyCells("0", "0", "1", "0", "0"), wantAppends: []string{"PATCH " + testInitialAdoptBlocksPath}},
+			},
+			wantSaved: func() map[string]string {
+				saved := dedupSavedAfterFirstRun()
+				saved[dedupHighlight6.ID] = "appended-2"
+				return saved
+			}(),
+		},
+		{
+			name: "state.db を消して続けて sync しても追記は 0 回で、Notion の既知を state.db に保存し直す",
+			runs: []dedupRun{
+				{wantCells: applyCells("0", "0", "3", "0", "0"), wantAppends: []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}},
+				{removeState: true, wantCells: applyCells("0", "0", "0", "0", "0")},
+			},
+			wantSaved: dedupSavedAfterFirstRun(),
+		},
+		{
+			name:    "sync --dry-run は state.db を作らない",
+			noState: true,
+			runs:    []dedupRun{{args: []string{"--dry-run"}}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var p config.Paths
+			if tt.noState {
+				p = setupXDG(t, validConfigTOML)
+			} else {
+				p = setupSyncedXDG(t, validConfigTOML)
 			}
-			for id, h := range got[bookID] {
-				if h.DestinationHighlightID == "" {
-					t.Errorf("saved highlight %s of %s has empty Block ID", id, bookID)
+			requests, _ := setupDryRunNotion(t, dedupReplies())
+			for i, r := range tt.runs {
+				if r.removeState {
+					if err := os.Remove(p.StateFile()); err != nil {
+						t.Fatal(err)
+					}
+				}
+				b := newInitialBrowser()
+				if r.extraHighlight {
+					b.highlights[initialBookAdopt.ID] = append(slices.Clone(b.highlights[initialBookAdopt.ID]), dedupHighlight6)
+				}
+				stubBrowser(t, b, nil)
+				before := len(requests())
+
+				code, stdout, stderr := runSyncApply(t, r.args...)
+				if code != 0 {
+					t.Errorf("run %d: run(sync) = %d, want 0", i+1, code)
+				}
+				if stderr != "" {
+					t.Errorf("run %d: stderr = %q, want %q", i+1, stderr, "")
+				}
+				if r.wantCells != nil {
+					if got := planCells(t, stdout); !reflect.DeepEqual(got, r.wantCells) {
+						t.Errorf("run %d: stdout cells = %q, want %q", i+1, got, r.wantCells)
+					}
+				}
+				got := requests()[before:]
+				if r.wantCells != nil && !slices.Equal(appendRequests(got), r.wantAppends) {
+					t.Errorf("run %d: append requests = %q, want %q", i+1, appendRequests(got), r.wantAppends)
+				}
+				if r.wantNoGetChildren {
+					for _, req := range got {
+						if req.method == http.MethodGet {
+							t.Errorf("run %d: GET request = %q, want none", i+1, req.path)
+						}
+					}
 				}
 			}
-		}
-	}
-
-	t.Run("通常の sync は追記した Highlight を Block ID 付きで state.db の highlights に残す", func(t *testing.T) {
-		p := setupSyncedXDG(t, validConfigTOML)
-		requests, _ := setupDryRunNotion(t, dedupReplies())
-		stubBrowser(t, newInitialBrowser(), nil)
-
-		code, stdout, stderr := runSyncApply(t)
-		if code != 0 || stderr != "" {
-			t.Fatalf("run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
-		}
-		if got, want := planCells(t, stdout), applyCells("0", "0", "3", "0", "0"); !slices.EqualFunc(got, want, slices.Equal) {
-			t.Errorf("stdout cells = %q, want %q", got, want)
-		}
-		if got, want := len(appendRequests(requests())), 3; got != want {
-			t.Errorf("len(append requests) = %d, want %d", got, want)
-		}
-		assertSaved(t, p)
-	})
-
-	t.Run("同じ Kindle の内容で続けて sync すると、2 回目は追記の要求を出さず追記件数が 0 になる", func(t *testing.T) {
-		setupSyncedXDG(t, validConfigTOML)
-		requests, _ := setupDryRunNotion(t, dedupReplies())
-		stubBrowser(t, newInitialBrowser(), nil)
-		if code, _, stderr := runSyncApply(t); code != 0 {
-			t.Fatalf("1st run(sync) code = %d, stderr = %q, want 0", code, stderr)
-		}
-		firstRequests := len(requests())
-
-		stubBrowser(t, newInitialBrowser(), nil)
-		code, stdout, stderr := runSyncApply(t)
-		if code != 0 || stderr != "" {
-			t.Errorf("2nd run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
-		}
-		if got, want := planCells(t, stdout), applyCells("0", "0", "0", "0", "0"); !slices.EqualFunc(got, want, slices.Equal) {
-			t.Errorf("2nd stdout cells = %q, want %q", got, want)
-		}
-		second := requests()[firstRequests:]
-		if got := appendRequests(second); got != nil {
-			t.Errorf("append requests in 2nd run = %q, want none", got)
-		}
-		// State の既知で足りるので、子 block の一覧も読まない
-		for _, r := range second {
-			if r.method == "GET" {
-				t.Errorf("GET request in 2nd run = %q, want none", r.path)
+			if tt.wantSaved == nil {
+				if _, err := os.Stat(p.StateFile()); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("stat(state.db) error = %v, want %v", err, os.ErrNotExist)
+				}
+				return
 			}
-		}
-	})
-
-	t.Run("2 回目の前に Kindle の Highlight が 1 つ増えると、2 回目はその 1 つだけを追記する", func(t *testing.T) {
-		p := setupSyncedXDG(t, validConfigTOML)
-		requests, _ := setupDryRunNotion(t, dedupReplies())
-		stubBrowser(t, newInitialBrowser(), nil)
-		if code, _, stderr := runSyncApply(t); code != 0 {
-			t.Fatalf("1st run(sync) code = %d, stderr = %q, want 0", code, stderr)
-		}
-		firstRequests := len(requests())
-
-		b2 := newInitialBrowser()
-		b2.highlights[initialBookAdopt.ID] = append(slices.Clone(b2.highlights[initialBookAdopt.ID]),
-			domain.Highlight{ID: "a-HIGHLIGHT-6", BookID: initialBookAdopt.ID, Text: "Distinctive Highlight Six"})
-		stubBrowser(t, b2, nil)
-		code, stdout, stderr := runSyncApply(t)
-		if code != 0 || stderr != "" {
-			t.Errorf("2nd run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
-		}
-		if got, want := planCells(t, stdout), applyCells("0", "0", "1", "0", "0"); !slices.EqualFunc(got, want, slices.Equal) {
-			t.Errorf("2nd stdout cells = %q, want %q", got, want)
-		}
-		if got, want := appendRequests(requests()[firstRequests:]), []string{"PATCH " + testInitialAdoptBlocksPath}; !slices.Equal(got, want) {
-			t.Errorf("append requests in 2nd run = %q, want %q", got, want)
-		}
-		want := slices.Clone(wantSavedIDs[initialBookAdopt.ID])
-		want = append(want, "a-HIGHLIGHT-6")
-		if got := highlightIDs(savedHighlights(t, p)[initialBookAdopt.ID]); !slices.Equal(got, want) {
-			t.Errorf("saved highlight IDs of %s = %v, want %v", initialBookAdopt.ID, got, want)
-		}
-	})
-
-	t.Run("state.db を消して続けて sync しても追記は 0 回で、Notion の既知を state.db に保存し直す", func(t *testing.T) {
-		p := setupSyncedXDG(t, validConfigTOML)
-		requests, _ := setupDryRunNotion(t, dedupReplies())
-		stubBrowser(t, newInitialBrowser(), nil)
-		if code, _, stderr := runSyncApply(t); code != 0 {
-			t.Fatalf("1st run(sync) code = %d, stderr = %q, want 0", code, stderr)
-		}
-		firstRequests := len(requests())
-		if err := os.Remove(p.StateFile()); err != nil {
-			t.Fatal(err)
-		}
-
-		stubBrowser(t, newInitialBrowser(), nil)
-		code, stdout, stderr := runSyncApply(t)
-		if code != 0 || stderr != "" {
-			t.Errorf("2nd run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
-		}
-		if got, want := planCells(t, stdout), applyCells("0", "0", "0", "0", "0"); !slices.EqualFunc(got, want, slices.Equal) {
-			t.Errorf("2nd stdout cells = %q, want %q", got, want)
-		}
-		if got := appendRequests(requests()[firstRequests:]); got != nil {
-			t.Errorf("append requests in 2nd run = %q, want none", got)
-		}
-		assertSaved(t, p)
-	})
-
-	t.Run("sync --dry-run は state.db を作らない", func(t *testing.T) {
-		p := setupXDG(t, validConfigTOML)
-		setupDryRunNotion(t, dedupReplies())
-		stubBrowser(t, newInitialBrowser(), nil)
-
-		if code, _, stderr := runSyncDryRun(t); code != 0 {
-			t.Fatalf("run(sync --dry-run) code = %d, stderr = %q, want 0", code, stderr)
-		}
-		if _, err := os.Stat(p.StateFile()); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("stat(state.db) error = %v, want not exist", err)
-		}
-	})
+			if got := savedBlockIDs(t, p); !reflect.DeepEqual(got, tt.wantSaved) {
+				t.Errorf("saved Block IDs = %v, want %v", got, tt.wantSaved)
+			}
+		})
+	}
 }
