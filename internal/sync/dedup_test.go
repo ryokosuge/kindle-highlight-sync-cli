@@ -30,7 +30,7 @@ func TestCandidates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := Candidates(tt.hs, local); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Candidates = %v, want %v", got, tt.want)
+				t.Errorf("Candidates() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -42,23 +42,44 @@ func TestDedup(t *testing.T) {
 		"a-4":        {ID: "blk-4", HighlightID: "a-4"},
 		"a-nokindle": {ID: "blk-x", HighlightID: "a-nokindle"},
 	}
-	candidates := dedupHighlights("a-4", "a-3", "a-2", "a-1")
-	toAppend, backfill := Dedup(candidates, remote)
-	if want := dedupHighlights("a-3", "a-1"); !reflect.DeepEqual(toAppend, want) {
-		t.Errorf("toAppend = %v, want %v", toAppend, want)
+	tests := []struct {
+		name         string
+		candidates   []domain.Highlight
+		remote       map[string]destination.RemoteHighlight
+		wantToAppend []domain.Highlight
+		wantBackfill []destination.RemoteHighlight
+	}{
+		{
+			name:         "Notion に無いものだけが candidate の順で追記され、Notion にあるものは backfill になる",
+			candidates:   dedupHighlights("a-4", "a-3", "a-2", "a-1"),
+			remote:       remote,
+			wantToAppend: dedupHighlights("a-3", "a-1"),
+			wantBackfill: []destination.RemoteHighlight{remote["a-4"], remote["a-2"]},
+		},
+		{
+			name:         "Kindle に無い Notion の既知は backfill に含まれない",
+			candidates:   dedupHighlights("a-1"),
+			remote:       remote,
+			wantToAppend: dedupHighlights("a-1"),
+			wantBackfill: nil,
+		},
+		{
+			name:         "Notion の既知が空なら candidate がすべて追記され backfill は空",
+			candidates:   dedupHighlights("a-1", "a-2"),
+			remote:       nil,
+			wantToAppend: dedupHighlights("a-1", "a-2"),
+			wantBackfill: nil,
+		},
 	}
-	wantBackfill := []destination.RemoteHighlight{remote["a-4"], remote["a-2"]}
-	if !reflect.DeepEqual(backfill, wantBackfill) {
-		t.Errorf("backfill = %v, want %v", backfill, wantBackfill)
-	}
-}
-
-func TestDedupRemoteEmpty(t *testing.T) {
-	toAppend, backfill := Dedup(dedupHighlights("a-1", "a-2"), nil)
-	if want := dedupHighlights("a-1", "a-2"); !reflect.DeepEqual(toAppend, want) {
-		t.Errorf("toAppend = %v, want %v", toAppend, want)
-	}
-	if len(backfill) != 0 {
-		t.Errorf("backfill = %v, want empty", backfill)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			toAppend, backfill := Dedup(tt.candidates, tt.remote)
+			if !reflect.DeepEqual(toAppend, tt.wantToAppend) {
+				t.Errorf("toAppend = %v, want %v", toAppend, tt.wantToAppend)
+			}
+			if !reflect.DeepEqual(backfill, tt.wantBackfill) {
+				t.Errorf("backfill = %v, want %v", backfill, tt.wantBackfill)
+			}
+		})
 	}
 }
