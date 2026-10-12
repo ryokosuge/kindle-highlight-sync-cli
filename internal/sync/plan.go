@@ -93,13 +93,18 @@ func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, ds
 	return p, nil
 }
 
-// countUnknown は known に Highlight ID が無い Highlight の数。known にだけある ID は数に影響しない。
-func countUnknown(hs []domain.Highlight, known map[string]destination.RemoteHighlight) int {
-	n := 0
+// unknownHighlights は known に Highlight ID が無い Highlight を、hs の順のまま返す。known にだけある ID は結果に影響しない。
+func unknownHighlights(hs []domain.Highlight, known map[string]destination.RemoteHighlight) []domain.Highlight {
+	var unknown []domain.Highlight
 	for _, h := range hs {
 		if _, ok := known[h.ID]; !ok {
-			n++
+			unknown = append(unknown, h)
 		}
 	}
-	return n
+	return unknown
+}
+
+// countUnknown は known に Highlight ID が無い Highlight の数。
+func countUnknown(hs []domain.Highlight, known map[string]destination.RemoteHighlight) int {
+	return len(unknownHighlights(hs, known))
 }
