@@ -132,6 +132,20 @@ func TestParseLibraryPage(t *testing.T) {
 				},
 			},
 		},
+		{
+			name:     "著者の要素に「著者: 」の接頭辞がある Book",
+			fixture:  "library_author_prefix.html",
+			fragment: true,
+			want: LibraryPage{
+				Books: []domain.Book{
+					{ID: "AAAAAAAAA7", ASIN: "AAAAAAAAA7", Title: "合成の書名 H", Author: "合成 著者 H"},
+					{ID: "AAAAAAAAA8", ASIN: "AAAAAAAAA8", Title: "合成の書名 I", Author: "合成 著者 I"},
+					{ID: "AAAAAAAAA9", ASIN: "AAAAAAAAA9", Title: "合成の書名 J", Author: "著者 合成 J"},
+					{ID: "AAAAAAAAB1", ASIN: "AAAAAAAAB1", Title: "合成の書名 K", Author: ""},
+					{ID: "b1-b2a5dc299814d91a43fac695591953db", Title: "合成の書名 ASIN なし", Author: "合成 著者 E"},
+				},
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
