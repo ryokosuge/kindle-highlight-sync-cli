@@ -69,7 +69,7 @@ func TestSyncApply(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 0 and empty", code, stderr)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "2", "0", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "0", "0"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		for _, secret := range []string{"Distinctive", testDryRunToken} {
@@ -77,8 +77,8 @@ func TestSyncApply(t *testing.T) {
 				t.Errorf("output contains %q: stdout = %q, stderr = %q", secret, stdout, stderr)
 			}
 		}
-		// Highlight を持つ exact と作成した Book のページには、既知を除いた分を追記する
-		if got, want := appendRequests(requests()), []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath}; !slices.Equal(got, want) {
+		// Highlight を持つ exact・作成・Adopt した Book のページには、既知を除いた分を追記する
+		if got, want := appendRequests(requests()), []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}; !slices.Equal(got, want) {
 			t.Errorf("append requests = %q, want %q", got, want)
 		}
 		// Book ごとに 1 回ずつ
@@ -102,7 +102,7 @@ func TestSyncApply(t *testing.T) {
 		if want := "partial failure: sync: 1 books were not synced: " + dryRunBookAmbiguous.ID + " (ambiguous)\n"; code != 8 || stderr != want {
 			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "2", "1", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "1", "0"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		// 書き込みは none と adoptable の Book の 2 回だけで、ambiguous の Book の分は無い
@@ -207,7 +207,7 @@ func TestSyncApply(t *testing.T) {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
 		// exact の 1 件は追記できている
-		if got, want := planCells(t, stdout), applyCells("1", "1", "1", "0", "1"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), applyCells("1", "1", "2", "0", "1"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		for _, secret := range []string{"Distinctive", testDryRunToken} {
@@ -228,7 +228,7 @@ func TestSyncApply(t *testing.T) {
 		if code != 0 || stderr != "" {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "2", "0", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "0", "0"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		// 予定の算出も確認も行わず、照合の query のあとに書き込む
@@ -246,7 +246,7 @@ func TestSyncApply(t *testing.T) {
 		if want := "source format error: sync: highlights of 1 of 5 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n"; code != 7 || stderr != want {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 7 and %q", code, stderr, want)
 		}
-		if got, want := planCells(t, stdout), applyCells("1", "1", "2", "1", "0"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), applyCells("1", "1", "3", "1", "0"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		if got, want := writeRequests(requests()), []string{"PATCH " + applyExactPath, "POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {

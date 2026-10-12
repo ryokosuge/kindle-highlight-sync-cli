@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"slices"
 	"strings"
@@ -40,17 +41,17 @@ var (
 	// 照合の読み取りだけの要求。ページ・Property・block を変える要求（POST /v1/pages 等）は無い
 	initialReadRequests = []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath, "GET " + testInitialAdoptBlocksPath}
 	// 確認を通ったあとの実行の要求。同期先を組み直して全件を取り直し、exact の Book を更新し、none の Book を作成し、adoptable の Book を Adopt する
-	// Highlight を持つ Book（exact と none）のページには、既知を除いて追記する。exact は既知を読んでから追記し、作成したページは既知を読まずに追記する
+	// Highlight を持つ Book（exact・none・adoptable）のページには、既知を除いて追記する。exact は既知を読んでから追記し、作成したページは既知を読まずに追記し、Adopt したページは Adopt のあとに既知を読んで追記する
 	initialApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath, "PATCH " + testDryRunBlocksPath,
-		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt"}
+		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath, "PATCH " + testInitialAdoptBlocksPath}
 	// 続く sync の実行の要求。exact のページには追記済みなので追記は無く、同じ Data Source を返す Notion では none の Book をまた作成して追記する
 	initialSecondApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
-		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt"}
+		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath}
 	initialSecondApplyRequestsNewBookFailed = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
-		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
+		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath}
 	// none の Book の Highlight の取得が失敗したときの実行の要求。作成までで追記は無い
 	initialApplyRequestsNewBookFailed = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath, "PATCH " + testDryRunBlocksPath,
-		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
+		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath, "PATCH " + testInitialAdoptBlocksPath}
 	// 確認を通った run が Notion に届ける要求の全体
 	initialAppliedRequests = slices.Concat(initialReadRequests, initialApplyRequests)
 	// 1 冊だけの構造の異常（Book 単位の失敗）と、全 Book に共通の枠の異常（fatal）。形は sync_test.go の bookErr / frameErr と同じ
@@ -87,6 +88,8 @@ func wantInitialRequests(confirmed bool) []string {
 func newInitialBrowser() *fakeBrowser {
 	b := newDryRunBrowser()
 	b.books = initialBooks
+	b.highlights = maps.Clone(dryRunHighlights)
+	b.highlights[initialBookAdopt.ID] = []domain.Highlight{{ID: "a-HIGHLIGHT-5", BookID: initialBookAdopt.ID, Text: "Distinctive Highlight Five"}}
 	return b
 }
 
