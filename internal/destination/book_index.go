@@ -22,7 +22,9 @@ type titleAuthorKey struct {
 // BookIndex は §10 のメモリ上の index。値は同じ key の候補をすべて持ち、Kindle ID Property が空のページは adoptable にも保持する。
 // ASIN / Title+Author / Title の index には Kindle ID Property が空のページ（Adopt の候補、§11）だけを入れる。
 // 空の値（空の Kindle ID Property・ASIN、正規化して空になる Title・Author）は key にしないので、空どうしは一致しない。
+// byID はすべてのページをページ ID で持ち、AddCreated / Adopt / Update で書いた値を反映した今の値を返す。
 type BookIndex struct {
+	byID                    map[string]IndexedBook
 	byKindleID              map[string][]IndexedBook
 	byASIN                  map[string][]IndexedBook
 	byNormalizedTitleAuthor map[titleAuthorKey][]IndexedBook
@@ -34,6 +36,7 @@ type BookIndex struct {
 // NewBookIndex は books から index を作る。hasAuthorMapping が false なら Author を照合に使わない。
 func NewBookIndex(books []IndexedBook, hasAuthorMapping bool) *BookIndex {
 	ix := &BookIndex{
+		byID:                    make(map[string]IndexedBook),
 		byKindleID:              make(map[string][]IndexedBook),
 		byASIN:                  make(map[string][]IndexedBook),
 		byNormalizedTitleAuthor: make(map[titleAuthorKey][]IndexedBook),
@@ -48,6 +51,7 @@ func NewBookIndex(books []IndexedBook, hasAuthorMapping bool) *BookIndex {
 }
 
 func (ix *BookIndex) add(b IndexedBook) {
+	ix.byID[b.Remote.ID] = b
 	if b.KindleID != "" {
 		ix.byKindleID[b.KindleID] = append(ix.byKindleID[b.KindleID], b)
 		return
@@ -68,6 +72,11 @@ func (ix *BookIndex) add(b IndexedBook) {
 }
 
 func (ix *BookIndex) remove(b IndexedBook) {
+	delete(ix.byID, b.Remote.ID)
+	if b.KindleID != "" {
+		removeCandidate(ix.byKindleID, b.KindleID, b.Remote.ID)
+		return
+	}
 	if b.ASIN != "" {
 		removeCandidate(ix.byASIN, b.ASIN, b.Remote.ID)
 	}
@@ -108,6 +117,31 @@ func (ix *BookIndex) Adopt(remote RemoteBook, bookID string) {
 	b.Remote = remote
 	b.KindleID = bookID
 	ix.add(b)
+}
+
+// Update は remote のページに書いた author / asin を index に反映する（§12 の Adopt / Subsequent Sync 列）。
+// values で nil の Property は変えない。last_annotated_at は照合にも次の判定にも使わないので持たない。
+// index に無いページなら何もしない。
+func (ix *BookIndex) Update(remote RemoteBook, values BookPropertyValues) {
+	b, ok := ix.byID[remote.ID]
+	if !ok {
+		return
+	}
+	ix.remove(b)
+	if values.Author != nil {
+		b.Author = values.Author.Value
+	}
+	if values.ASIN != nil {
+		b.ASIN = values.ASIN.Value
+	}
+	ix.add(b)
+}
+
+// Lookup は remote のページの今の値を返す。index に無いページなら ok が false。
+// AddCreated / Adopt / Update で反映した値を含む。
+func (ix *BookIndex) Lookup(remote RemoteBook) (IndexedBook, bool) {
+	b, ok := ix.byID[remote.ID]
+	return b, ok
 }
 
 // Match は §9 の順（Kindle ID → ASIN → Title+Author → Title だけ）で book を照合する。

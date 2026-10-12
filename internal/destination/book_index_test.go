@@ -110,6 +110,39 @@ func TestBookIndexMatch(t *testing.T) {
 			wantStatus: "exact",
 			wantID:     "page-title",
 		},
+		{
+			name: "Update で author / asin を書いたページは、その Book ID の Book と exact のまま",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", ""),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, kindleBook(testASIN, "Go", "Alan").ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+					ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "exact",
+			wantID:           "page-title",
+		},
+		{
+			name: "Update で author / asin を書いたページは、同じ Title+Author の別の Book の候補に戻らない",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", ""),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, kindleBook(testASIN, "Go", "Alan").ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+					ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
 		// ASIN の段
 		{
 			name: "Kindle ID Property が空で ASIN が一致すれば Title+Author が一致する別のページより優先して adoptable",
@@ -418,6 +451,112 @@ func TestBookIndexMatch(t *testing.T) {
 			}
 			if !reflect.DeepEqual(got.Book, wantBook) {
 				t.Errorf("Match().Book = %+v, want %+v", got.Book, wantBook)
+			}
+		})
+	}
+}
+
+func TestBookIndexLookup(t *testing.T) {
+	book := kindleBook(testASIN, "Go", "Alan")
+	tests := []struct {
+		name   string
+		pages  []IndexedBook
+		update func(ix *BookIndex)
+		remote RemoteBook
+		want   IndexedBook
+		wantOK bool
+	}{
+		{
+			name:   "Adopt の候補のページを ID で引ける",
+			pages:  []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			remote: RemoteBook{ID: "page-asin"},
+			want:   page("page-asin", "", testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:   "Kindle ID Property が入っているページも ID で引ける",
+			pages:  []IndexedBook{page("page-kindle", testASIN, "", "Other", "Other")},
+			remote: RemoteBook{ID: "page-kindle"},
+			want:   page("page-kindle", testASIN, "", "Other", "Other"),
+			wantOK: true,
+		},
+		{
+			name:   "index に無いページは ok が false",
+			pages:  []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			remote: RemoteBook{ID: "page-missing"},
+			wantOK: false,
+		},
+		{
+			name:  "作成したページは Kindle ID Property に Book ID が入った値で引ける",
+			pages: []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.AddCreated(RemoteBook{ID: "page-created"}, book.ID)
+			},
+			remote: RemoteBook{ID: "page-created"},
+			want:   page("page-created", book.ID, "", "", ""),
+			wantOK: true,
+		},
+		{
+			name:  "Adopt したページは Kindle ID Property に Book ID が入り、他の値はそのまま",
+			pages: []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-asin"}, book.ID)
+			},
+			remote: RemoteBook{ID: "page-asin"},
+			want:   page("page-asin", book.ID, testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:  "Update で書いた author / asin が入り、nil の Property は変わらない",
+			pages: []IndexedBook{page("page-title", "", "", "Go", " ")},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, book.ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+					ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			remote: RemoteBook{ID: "page-title"},
+			want:   page("page-title", book.ID, testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:  "Update で ASIN だけ書くと author は変わらない",
+			pages: []IndexedBook{page("page-title", "", "", "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, book.ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					ASIN: &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			remote: RemoteBook{ID: "page-title"},
+			want:   page("page-title", book.ID, testASIN, "Go", "Alan"),
+			wantOK: true,
+		},
+		{
+			name:  "index に無いページへの Update は何もしない",
+			pages: []IndexedBook{page("page-asin", "", testASIN, "Go", "Alan")},
+			update: func(ix *BookIndex) {
+				ix.Update(RemoteBook{ID: "page-missing"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+				})
+			},
+			remote: RemoteBook{ID: "page-missing"},
+			wantOK: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ix := NewBookIndex(tt.pages, true)
+			if tt.update != nil {
+				tt.update(ix)
+			}
+			got, ok := ix.Lookup(tt.remote)
+			if ok != tt.wantOK {
+				t.Errorf("Lookup() ok = %t, want %t", ok, tt.wantOK)
+			}
+			if got != tt.want {
+				t.Errorf("Lookup() = %+v, want %+v", got, tt.want)
 			}
 		})
 	}

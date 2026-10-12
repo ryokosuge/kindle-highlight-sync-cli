@@ -29,19 +29,25 @@ func (d *NotionDestination) CreateBook(ctx context.Context, book domain.Book) (R
 	return remote, nil
 }
 
-// AdoptBook は remote の Kindle ID Property にだけ book の Book ID を書き（§11）、そのページを book と exact で一致するものとして index に反映する。
-// title / author / asin / last_annotated_at は書かない（§12 の Adopt 列の author / asin / last_annotated_at は後続の Task）。
-// 呼び出し側は照合が adoptable の Book と、その Match が返したページにだけ使う前提。
+// AdoptBook は remote の Kindle ID Property に book の Book ID を書き（§11）、§12 の Adopt 列に従って
+// author / asin は index にある今の値が空のときだけ、last_annotated_at は Kindle の値があれば、同じ 1 回の更新で書く。
+// title と mapping の無い Property は body に入れない（Notion は body に無い Property の値を残す）。
+// そのページを book と exact で一致するものとして index に反映し、書いた author / asin も index の値にする。
+// 呼び出し側は照合が adoptable の Book と、その Match が返したページにだけ使う前提（index に無いページは今の値をすべて空として扱う）。
 // index をまだ作っていなければ先に作る。更新に失敗したら Notion の error（exitcode.Notion）をそのまま返し、index は変えない。
 func (d *NotionDestination) AdoptBook(ctx context.Context, remote RemoteBook, book domain.Book) error {
 	if err := d.ensureIndex(ctx); err != nil {
 		return err
 	}
-	properties := map[string]notion.PropertyInput{d.notion.Mapping.KindleID: notion.RichTextInput(book.ID)}
+	current, _ := d.index.Lookup(remote)
+	values := PlanBookProperties(current, book, d.notion.Mapping)
+	properties := propertyInputs(values)
+	properties[d.notion.Mapping.KindleID] = notion.RichTextInput(book.ID)
 	if err := d.client.UpdatePage(ctx, remote.ID, properties); err != nil {
 		return err
 	}
 	d.index.Adopt(remote, book.ID)
+	d.index.Update(remote, values)
 	return nil
 }
 
@@ -55,9 +61,31 @@ func (d *NotionDestination) createProperties(book domain.Book) map[string]notion
 	setRichText(properties, mapping.Author, book.Author)
 	setRichText(properties, mapping.ASIN, book.ASIN)
 	if mapping.LastAnnotatedAt != "" && book.LastAnnotatedAt != nil {
-		properties[mapping.LastAnnotatedAt] = notion.DateInput(book.LastAnnotatedAt.UTC().Format(lastAnnotatedAtLayout))
+		properties[mapping.LastAnnotatedAt] = dateInput(*book.LastAnnotatedAt)
 	}
 	return properties
+}
+
+// propertyInputs は PlanBookProperties の結果を Property ID を key にした更新の body にする。nil の Property は入れない。
+// 値は空のときに Property を消す（rich_text の [] / date の null）ので、空の値は PlanBookProperties の側で nil にしてある前提。
+// mapping の Property ID は項目ごとに異なる前提で書く。重複は config の読み込み側で弾く（別 Task で扱う）。
+func propertyInputs(values BookPropertyValues) map[string]notion.PropertyInput {
+	properties := make(map[string]notion.PropertyInput)
+	if values.Author != nil {
+		properties[values.Author.PropertyID] = notion.RichTextInput(values.Author.Value)
+	}
+	if values.ASIN != nil {
+		properties[values.ASIN.PropertyID] = notion.RichTextInput(values.ASIN.Value)
+	}
+	if values.LastAnnotatedAt != nil {
+		properties[values.LastAnnotatedAt.PropertyID] = dateInput(values.LastAnnotatedAt.Value)
+	}
+	return properties
+}
+
+// dateInput は日付だけ（lastAnnotatedAtLayout）の date Property の値を作る。
+func dateInput(t time.Time) notion.PropertyInput {
+	return notion.DateInput(t.UTC().Format(lastAnnotatedAtLayout))
 }
 
 // setRichText は mapping があり（propertyID が空でない）値もあるときだけ rich_text の Property を足す。
