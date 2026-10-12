@@ -1,6 +1,8 @@
 package sync
 
 import (
+	"time"
+
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/destination"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/state"
@@ -22,4 +24,19 @@ func Dedup(candidates []domain.Highlight, remote map[string]destination.RemoteHi
 		}
 	}
 	return toAppend, backfill
+}
+
+// highlightStates は Notion 上の Highlight を、bookID の Book の State に保存する行（Block ID 付き）にする。
+// at は LastSyncedAt に入れる同期の時刻で、テストで固定できるよう呼び出し側から受け取る。
+func highlightStates(bookID string, rs []destination.RemoteHighlight, at time.Time) []state.HighlightState {
+	states := make([]state.HighlightState, 0, len(rs))
+	for _, r := range rs {
+		states = append(states, state.HighlightState{
+			KindleHighlightID:      r.HighlightID,
+			KindleBookID:           bookID,
+			DestinationHighlightID: r.ID,
+			LastSyncedAt:           at,
+		})
+	}
+	return states
 }

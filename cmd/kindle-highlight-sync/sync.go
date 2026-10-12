@@ -181,7 +181,7 @@ func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser) (
 		}
 		targets = append(targets, book)
 	}
-	result, err := syncengine.ApplyBooks(ctx, targets, src, dst)
+	result, err := syncengine.ApplyBooks(ctx, targets, src, dst, a.store, time.Now())
 	// fatal な失敗で止まっても、そこまでに書いた分は Notion に残るので件数を出してから error を返す
 	if werr := writeApplyResult(a.out, result); err == nil {
 		err = werr
