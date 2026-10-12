@@ -94,7 +94,7 @@ func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, ds
 }
 
 // unknownHighlights は known に Highlight ID が無い Highlight を、hs の順のまま返す。known にだけある ID は結果に影響しない。
-func unknownHighlights(hs []domain.Highlight, known map[string]destination.RemoteHighlight) []domain.Highlight {
+func unknownHighlights[V any](hs []domain.Highlight, known map[string]V) []domain.Highlight {
 	var unknown []domain.Highlight
 	for _, h := range hs {
 		if _, ok := known[h.ID]; !ok {
