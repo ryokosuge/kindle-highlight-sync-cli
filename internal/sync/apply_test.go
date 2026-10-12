@@ -399,6 +399,34 @@ func TestApplyBooksAppend(t *testing.T) {
 			wantListCalls: []string{"page-adopt"},
 		},
 		{
+			name:    "Highlight の取得がタイムアウトしたら残りの Book を続け、その Book ID が失敗に残る",
+			srcErrs: map[string]error{"book-exact": context.DeadlineExceeded},
+			want: ApplyResult{
+				Created:  []string{"book-new"},
+				Adopted:  []string{"book-adopt"},
+				Exact:    []string{"book-exact"},
+				Skipped:  []string{"book-ambiguous"},
+				Failed:   []BookFailure{{BookID: "book-exact", Kind: BookFailureFetch}},
+				Appended: 6,
+			},
+			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
+			wantListCalls: []string{"page-adopt"},
+		},
+		{
+			name:    "包まれたタイムアウトで Highlight の取得が失敗しても残りの Book を続ける",
+			srcErrs: map[string]error{"book-adopt": exitcode.New(exitcode.Browser, fmt.Errorf("source: highlights page: %w", context.DeadlineExceeded))},
+			want: ApplyResult{
+				Created:  []string{"book-new"},
+				Adopted:  []string{"book-adopt"},
+				Exact:    []string{"book-exact"},
+				Skipped:  []string{"book-ambiguous"},
+				Failed:   []BookFailure{{BookID: "book-adopt", Kind: BookFailureFetch}},
+				Appended: 6,
+			},
+			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-exact": {"a-1", "a-2", "a-3"}},
+			wantListCalls: []string{"page-exact"},
+		},
+		{
 			name:    "ブラウザの失敗で Highlight が取れなければ種類を保って残りの Book を書かずに止める",
 			srcErrs: map[string]error{"book-exact": browserError},
 			want: ApplyResult{
