@@ -81,7 +81,7 @@ func (e *booksNotSyncedError) Error() string {
 }
 
 // ApplyBooks は Book ごとに照合し、none なら CreateBook、adoptable なら AdoptBook、exact なら UpdateBook を呼び、ambiguous は skip する（§51）。
-// ページが決まった Book（none は作成後、adoptable は Adopt 後、exact はそのまま）は、Source の Highlight を取り、
+// ページが決まった Book（none は作成後、adoptable は Adopt 後、exact は UpdateBook 後）は、Source の Highlight を取り、
 // 1 件でもあれば Notion の既知の Highlight（ListHighlightIDs）を取って、既知を除いた残りを Source から取った順のまま AppendHighlights に渡す（§24 / §26）。作成した Book はページが空なので既知を取らず全部を渡す。
 // Highlight が 0 件の Book は Notion の一覧を読まず、追記するものが無い Book では AppendHighlights を呼ばない。
 // 取得の順は dry-run（BuildPlan。既知 → Highlight）と違うが、既知を除く判定（unknownHighlights）は共有している。

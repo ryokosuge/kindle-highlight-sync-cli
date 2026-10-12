@@ -273,6 +273,7 @@ func TestApplyBooksAppend(t *testing.T) {
 	tests := []struct {
 		name              string
 		noHighlights      bool
+		writeErrs         map[string]error
 		remoteIDs         map[string][]string
 		listErrs          map[string]error
 		srcErrs           map[string]error
@@ -306,6 +307,19 @@ func TestApplyBooksAppend(t *testing.T) {
 				Exact:   []string{"book-exact"},
 				Skipped: []string{"book-ambiguous"},
 			},
+		},
+		{
+			name:      "exact は UpdateBook が成功してから追記し、UpdateBook が失敗した exact は取得も追記もしない",
+			writeErrs: map[string]error{"book-exact": notionStatusError(http.StatusBadGateway)},
+			want: ApplyResult{
+				Created:  []string{"book-new"},
+				Adopted:  []string{"book-adopt"},
+				Skipped:  []string{"book-ambiguous"},
+				Failed:   []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+				Appended: 6,
+			},
+			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
+			wantListCalls: []string{"page-adopt"},
 		},
 		{
 			name:      "追記するものが無い Book では AppendHighlights を呼ばない",
@@ -418,7 +432,7 @@ func TestApplyBooksAppend(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dst := &fakeDestination{
-				matches: applyMatches, remoteIDs: tt.remoteIDs, listErrs: tt.listErrs,
+				matches: applyMatches, writeErrs: tt.writeErrs, remoteIDs: tt.remoteIDs, listErrs: tt.listErrs,
 				appendErrs: tt.appendErrs, appendedBeforeErr: tt.appendedBeforeErr,
 			}
 			src := &fakeSource{highlights: allThree, errs: tt.srcErrs}
@@ -438,6 +452,9 @@ func TestApplyBooksAppend(t *testing.T) {
 			}
 			if !reflect.DeepEqual(dst.appends, tt.wantAppends) {
 				t.Errorf("appends = %v, want %v", dst.appends, tt.wantAppends)
+			}
+			if slices.Contains(tt.want.Exact, "book-exact") && !slices.Contains(dst.writes, "update page-exact book-exact") {
+				t.Errorf("writes = %v, want UpdateBook for book-exact", dst.writes)
 			}
 			if !slices.Equal(dst.listCalls, tt.wantListCalls) {
 				t.Errorf("listCalls = %v, want %v", dst.listCalls, tt.wantListCalls)
