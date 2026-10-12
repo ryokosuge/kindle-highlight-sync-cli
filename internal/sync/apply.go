@@ -16,10 +16,11 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/state"
 )
 
-// highlightStore は State から Book の既知の Highlight を読み、Notion で見つけた分と追記した分を保存する。state.StateStore の一部で、テストで差し替える。
+// highlightStore は State から Book の既知の Highlight を読み、Notion で見つけた分と追記した分を保存し、追記の残りが 0 で終わった Book を記録する。state.StateStore の一部で、テストで差し替える。
 type highlightStore interface {
 	ListHighlightIDs(ctx context.Context, bookID string) (map[string]state.HighlightState, error)
 	SaveHighlights(ctx context.Context, states []state.HighlightState) error
+	MarkBookSynced(ctx context.Context, b state.BookState) error
 }
 
 // BookFailureKind は Book 1 冊の書き込みが失敗した種類。文言には Book ID とこの種類だけを出し、タイトル・token は入れない（§74）。
@@ -119,7 +120,7 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 				continue
 			}
 			r.Exact = append(r.Exact, b.ID)
-			if err := r.appendUnknown(ctx, b, *m.Book, true, src, dst, st, now); err != nil {
+			if err := r.syncHighlights(ctx, b, *m.Book, true, src, dst, st, now); err != nil {
 				return r, err
 			}
 		case destination.BookMatchAdoptable:
@@ -130,7 +131,7 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 				continue
 			}
 			r.Adopted = append(r.Adopted, b.ID)
-			if err := r.appendUnknown(ctx, b, *m.Book, true, src, dst, st, now); err != nil {
+			if err := r.syncHighlights(ctx, b, *m.Book, true, src, dst, st, now); err != nil {
 				return r, err
 			}
 		case destination.BookMatchNone:
@@ -142,7 +143,7 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 				continue
 			}
 			r.Created = append(r.Created, b.ID)
-			if err := r.appendUnknown(ctx, b, remote, false, src, dst, st, now); err != nil {
+			if err := r.syncHighlights(ctx, b, remote, false, src, dst, st, now); err != nil {
 				return r, err
 			}
 		case destination.BookMatchAmbiguous:
@@ -152,31 +153,47 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 	return r, nil
 }
 
+// syncHighlights は appendUnknown で追記し、追記の残りが 0 で終わった Book だけを books に now で記録する。
+// 記録の失敗は、残りの Book を書かずに exitcode.LocalState の error を返す。記録されなかった Book の前回の記録は変えない。
+func (r *ApplyResult) syncHighlights(ctx context.Context, book domain.Book, remote destination.RemoteBook, hasKnown bool, src highlightLister, dst destination.Destination, st highlightStore, now time.Time) error {
+	done, err := r.appendUnknown(ctx, book, remote, hasKnown, src, dst, st, now)
+	if err != nil || !done {
+		return err
+	}
+	// 追記の失敗と同じく、中断・タイムアウトでも記録できるよう、キャンセルだけ切り離した context で記録する
+	synced := state.BookState{KindleBookID: book.ID, DestinationBookID: remote.ID, ASIN: book.ASIN, Title: book.Title, LastAnnotatedAt: book.LastAnnotatedAt, LastSyncedAt: now}
+	if err := st.MarkBookSynced(context.WithoutCancel(ctx), synced); err != nil {
+		return localStateError("mark book synced", book.ID, err)
+	}
+	return nil
+}
+
 // appendUnknown は remote のページに、State にも Notion にも無い Highlight を追記して件数を r.Appended に足し、Notion で見つけた分と追記した分を State に保存する。
 // Highlight が 0 件なら State も既知も取らずに返す。hasKnown が false のページ（作成直後）は State も Notion の既知も取らず、Source の Highlight を全部渡す。
 // Book 単位の失敗は r.Failed に残して nil を返し、止めるべき失敗（fail 参照）と State の失敗は error で返す。
-func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remote destination.RemoteBook, hasKnown bool, src highlightLister, dst destination.Destination, st highlightStore, now time.Time) error {
+// 戻り値の bool は、失敗が無く追記の残りが 0 で終わった（追記するものが無かった場合を含む）ことを表す。
+func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remote destination.RemoteBook, hasKnown bool, src highlightLister, dst destination.Destination, st highlightStore, now time.Time) (bool, error) {
 	hs, err := src.ListHighlights(ctx, book)
 	if err != nil {
-		return r.fail(book.ID, BookFailureFetch, err)
+		return false, r.fail(book.ID, BookFailureFetch, err)
 	}
 	if len(hs) == 0 {
-		return nil
+		return true, nil
 	}
 	var local map[string]state.HighlightState
 	if hasKnown {
 		if local, err = st.ListHighlightIDs(ctx, book.ID); err != nil {
-			return localStateError("list highlights", book.ID, err)
+			return false, localStateError("list highlights", book.ID, err)
 		}
 	}
 	candidates := Candidates(hs, local)
 	if len(candidates) == 0 {
-		return nil
+		return true, nil
 	}
 	var known map[string]destination.RemoteHighlight
 	if hasKnown {
 		if known, err = dst.ListHighlightIDs(ctx, remote); err != nil {
-			return r.fail(book.ID, BookFailureListKnown, err)
+			return false, r.fail(book.ID, BookFailureListKnown, err)
 		}
 	}
 	unknown, backfill := Dedup(candidates, known)
@@ -190,13 +207,13 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 	// 中断・タイムアウトでの失敗でも保存できるよう、キャンセルだけ切り離した context で保存し、元の追記の error は fail で仕分ける
 	if saved := highlightStates(book.ID, append(backfill, appended...), now); len(saved) > 0 {
 		if err := st.SaveHighlights(context.WithoutCancel(ctx), saved); err != nil {
-			return localStateError("save highlights", book.ID, err)
+			return false, localStateError("save highlights", book.ID, err)
 		}
 	}
 	if appendErr != nil {
-		return r.fail(book.ID, BookFailureAppend, appendErr)
+		return false, r.fail(book.ID, BookFailureAppend, appendErr)
 	}
-	return nil
+	return true, nil
 }
 
 // localStateError は State の失敗を exitcode.LocalState（6）の error にする。すでに LocalState ならそのまま返す。

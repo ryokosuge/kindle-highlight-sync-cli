@@ -74,6 +74,7 @@ func (e *booksFailedError) Error() string {
 // initial_sync_completed_at が無ければ Initial Sync として、予定を組んで Create / Adopt の件数の確認を取ってから取得に進み（§47）、
 // 確認の後ろで none の Book を作成し adoptable の Book を Adopt して、件数を出す（§51）。skip・書き込みの失敗は exit 8（§72）。取得を終えた run を記録する（§48）。
 var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
+	startedAt := time.Now() // Highlight と Book の LastSyncedAt に入れる、sync の開始時刻
 	// Open に渡す ctx にタイムアウトを付けると Chrome ごと止まるので、Notebook を開く action だけに付ける
 	b, err := openBrowser(ctx, source.Options{
 		ProfileDir: a.paths.BrowserProfileDir(),
@@ -139,7 +140,7 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// ページが決まった Book には既知を除いた Highlight を追記する（§51 / §24）。Highlight は ApplyBooks が Book ごとに取る。
 	// 取得の失敗の仕分けは ApplyBooks に任せる。1 冊だけの構造の異常とタイムアウトは Failed に載って続き、
 	// 全 Book に共通の枠の異常（§73）・ブラウザの失敗・ctx の取消・ローカル状態の不整合は種類を変えずにここへ返る
-	applied, noASIN, err := applyBooks(ctx, a, books, b)
+	applied, noASIN, err := applyBooks(ctx, a, books, b, startedAt)
 	if err != nil {
 		return err
 	}
@@ -166,7 +167,7 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 // applyBooks は ASIN の無い Book を失敗に数えて除き、残りの Book ごとに作成・Adopt・追記を実行し、件数を a.out に出す。
 // 同期先の組み立て（exit 3）と照合・書き込みの fatal な失敗（exit 4）、全 Book に共通の取得の失敗は種類を変えずに返す。
 // skip・Book 単位の失敗は結果に残し、呼び出し側が exit 7 / exit 8 に仕分ける。
-func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser) (syncengine.ApplyResult, []bookFailure, error) {
+func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser, startedAt time.Time) (syncengine.ApplyResult, []bookFailure, error) {
 	dst, err := newDestination(a)
 	if err != nil {
 		return syncengine.ApplyResult{}, nil, err
@@ -181,7 +182,7 @@ func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser) (
 		}
 		targets = append(targets, book)
 	}
-	result, err := syncengine.ApplyBooks(ctx, targets, src, dst, a.store, time.Now())
+	result, err := syncengine.ApplyBooks(ctx, targets, src, dst, a.store, startedAt)
 	// fatal な失敗で止まっても、そこまでに書いた分は Notion に残るので件数を出してから error を返す
 	if werr := writeApplyResult(a.out, result); err == nil {
 		err = werr
