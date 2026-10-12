@@ -390,25 +390,29 @@ func TestSyncDryRun(t *testing.T) {
 		}
 	})
 
-	t.Run("--dry-run を付けない Initial Sync の sync は予定の表を出さず、Notion には照合の読み取りだけを要求し、Highlight を予定と取得で 2 回取る", func(t *testing.T) {
+	t.Run("--dry-run を付けない Initial Sync の sync は予定の表を出さず、Notion には照合の読み取りのあとに実行の要求を出し、Highlight を予定と取得で 2 回取る", func(t *testing.T) {
 		setupXDG(t, validConfigTOML)
-		requests, clientCalls := setupDryRunNotion(t, dryRunReplies())
+		replies := dryRunReplies()
+		replies[testPagesPath] = `{"object":"page","id":"page-created"}`
+		requests, clientCalls := setupDryRunNotion(t, replies)
 		b := newDryRunBrowser()
 		stubBrowser(t, b, nil)
 
+		// ambiguous の Book は skip するので exit 8
 		code, stderr := runSync(t, "--yes")
-		if code != 0 || stderr != "" {
-			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 0 and empty", code, stderr)
+		if want := "partial failure: sync: 1 books were not synced: " + dryRunBookAmbiguous.ID + " (ambiguous)\n"; code != 8 || stderr != want {
+			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
 		// 予定の算出は ambiguous を除いた Book の Highlight を取り、従来の取得は全 Book を取る
 		want := []domain.Book{dryRunBookExact, dryRunBookNew, dryRunBookExact, dryRunBookNew, dryRunBookAmbiguous}
 		if !slices.Equal(b.hlBooks, want) {
 			t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
 		}
-		if got := clientCalls(); got != 1 {
-			t.Errorf("newNotionClient calls = %d, want 1", got)
+		// 予定の算出と実行がそれぞれ同期先を組む
+		if got := clientCalls(); got != 2 {
+			t.Errorf("newNotionClient calls = %d, want 2", got)
 		}
-		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath)
+		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "POST "+testPagesPath)
 	})
 
 	t.Run("本物の sync が排他を持っている間の dry-run は待たずに exit 9 で終わる", func(t *testing.T) {

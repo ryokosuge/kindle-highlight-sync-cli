@@ -23,6 +23,7 @@ import (
 // Initial Sync の end-to-end の fixture。dryRunBooks に Adopt の候補を 1 冊足し、Create 1 冊（dryRunBookNew）・Adopt 1 冊になる。
 const (
 	testInitialAdoptBlocksPath = "/v1/blocks/page-adopt/children"
+	testPagesPath              = "/v1/pages"
 	wantInitialPrompt          = "1 books will be created.\n1 existing pages will be adopted.\n\nContinue? [y/N] "
 	wantInitialDeclinedErr     = "configuration / confirmation required: initial sync was not confirmed\n"
 	wantInitialNoTerminalErr   = "configuration / confirmation required: initial sync will create 1 books and adopt 1 existing pages: run sync with --yes to confirm without a terminal\n"
@@ -30,11 +31,17 @@ const (
 
 var (
 	initialBookAdopt = domain.Book{ID: "B000000005", ASIN: "B000000005", Title: "Distinctive Adoptable Book"}
-	initialBooks     = []domain.Book{dryRunBookExact, dryRunBookNew, dryRunBookAmbiguous, initialBookAdopt}
+	initialBooks     = []domain.Book{dryRunBookExact, dryRunBookNew, initialBookAdopt}
+	// ambiguous の Book を足したもの。予定の算出は ambiguous の Book の Highlight を取らず、実行は skip して exit 8 にする
+	initialBooksWithAmbiguous = []domain.Book{dryRunBookExact, dryRunBookNew, dryRunBookAmbiguous, initialBookAdopt}
 	// 予定の算出（BuildPlan）が Highlight を取る Book の順。ambiguous は取らない
 	initialPlanHLBooks = []domain.Book{dryRunBookExact, dryRunBookNew, initialBookAdopt}
 	// 照合の読み取りだけの要求。ページ・Property・block を変える要求（POST /v1/pages 等）は無い
 	initialReadRequests = []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath, "GET " + testInitialAdoptBlocksPath}
+	// 確認を通ったあとの実行の要求。同期先を組み直して全件を取り直し、none の Book を作成し、adoptable の Book を Adopt する
+	initialApplyRequests = []string{"POST " + testDryRunQueryPath, "POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
+	// 確認を通った run が Notion に届ける要求の全体
+	initialAppliedRequests = slices.Concat(initialReadRequests, initialApplyRequests)
 	// 1 冊だけの構造の異常（Book 単位の失敗）と、全 Book に共通の枠の異常（fatal）。形は sync_test.go の bookErr / frameErr と同じ
 	errSourceFormatBook = fmt.Errorf("source: list highlights B000000003: page 1: row 1: %w",
 		exitcode.New(exitcode.SourceFormat, fmt.Errorf("highlight id is missing: %w", source.ErrSourceFormat)))
@@ -52,7 +59,17 @@ func initialReplies() map[string]string {
 		dryRunPageJSON("page-adopt", "", initialBookAdopt.Title),
 	)
 	replies[testInitialAdoptBlocksPath] = blockListBody()
+	replies[testPagesPath] = `{"object":"page","id":"page-created"}`
+	replies[testPagesPath+"/page-adopt"] = `{"object":"page","id":"page-adopt"}`
 	return replies
+}
+
+// wantInitialRequests は Initial Sync の run が Notion に届ける要求。確認を通って記録した run は実行の要求まで届け、そうでなければ照合の読み取りだけ。
+func wantInitialRequests(confirmed bool) []string {
+	if confirmed {
+		return initialAppliedRequests
+	}
+	return initialReadRequests
 }
 
 // newInitialBrowser は Notebook に到達し initialBooks を返す fake。
@@ -189,7 +206,7 @@ func TestSyncInitial(t *testing.T) {
 				if !b.closed {
 					t.Error("browser not closed")
 				}
-				assertRequests(t, requests(), initialReadRequests...)
+				assertRequests(t, requests(), wantInitialRequests(tt.wantRecorded)...)
 				if got := initialSyncRecorded(t, p); got != tt.wantRecorded {
 					t.Errorf("initial_sync_completed_at recorded = %v, want %v", got, tt.wantRecorded)
 				}
@@ -239,7 +256,7 @@ func TestSyncInitial(t *testing.T) {
 				if !slices.Equal(b.hlBooks, tt.wantHLBooks) {
 					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, tt.wantHLBooks)
 				}
-				assertRequests(t, requests(), initialReadRequests...)
+				assertRequests(t, requests(), wantInitialRequests(tt.wantRecorded)...)
 				if got := initialSyncRecorded(t, p); got != tt.wantRecorded {
 					t.Errorf("initial_sync_completed_at recorded = %v, want %v", got, tt.wantRecorded)
 				}
@@ -265,12 +282,12 @@ func TestSyncInitial(t *testing.T) {
 				name:       "ASIN の無い Book があって exit 7 で終わる（partial）",
 				books:      slices.Concat(initialBooks, []domain.Book{dryRunBookNoASIN}),
 				wantCode:   7,
-				wantStderr: "source format error: sync: highlights of 1 of 5 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
+				wantStderr: "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
 			},
 			{
 				// 予定の算出は ambiguous の Book の Highlight を取らないので、その Book だけの構造の異常は取得のループで初めて出る
 				name:         "1 冊の Highlight のページだけが構造の異常で exit 7 で終わる（partial）",
-				books:        initialBooks,
+				books:        initialBooksWithAmbiguous,
 				highlightErr: map[string]error{dryRunBookAmbiguous.ID: errSourceFormatBook},
 				wantCode:     7,
 				wantStderr:   "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookAmbiguous.ID + " (unexpected notebook structure)\n",
@@ -303,7 +320,7 @@ func TestSyncInitial(t *testing.T) {
 				if !initialSyncRecorded(t, p) {
 					t.Fatal("initial_sync_completed_at not recorded")
 				}
-				assertRequests(t, requests(), initialReadRequests...)
+				assertRequests(t, requests(), initialAppliedRequests...)
 
 				// 2 回目は Initial Sync ではないので、Notion に要求せず問いも出さず、Highlight は取得のループで 1 回だけ取る
 				b2 := newInitialBrowser()
@@ -320,7 +337,7 @@ func TestSyncInitial(t *testing.T) {
 				if !slices.Equal(b2.hlBooks, withASIN(tt.books)) {
 					t.Errorf("2nd ListHighlights() books = %+v, want %+v", b2.hlBooks, withASIN(tt.books))
 				}
-				assertRequests(t, requests(), initialReadRequests...)
+				assertRequests(t, requests(), slices.Concat(initialAppliedRequests, initialApplyRequests)...)
 			})
 		}
 	})
@@ -376,7 +393,7 @@ func TestSyncInitial(t *testing.T) {
 				wantStderr: func(config.Paths) string {
 					return "source format error: " + errHighlightsFrame.Error() + "\n"
 				},
-				wantRequests: initialReadRequests,
+				wantRequests: initialAppliedRequests,
 			},
 			{
 				// 取得を終えても Chrome を閉じるのに失敗した run は success ではないので記録せず、exit 5 はそのまま
@@ -388,7 +405,7 @@ func TestSyncInitial(t *testing.T) {
 				wantStderr: func(config.Paths) string {
 					return "browser error: source: close browser: boom\n"
 				},
-				wantRequests: initialReadRequests,
+				wantRequests: initialAppliedRequests,
 			},
 			{
 				// Book 単位の失敗と閉じる失敗が重なった run も記録しない。返すのは本体の失敗（exit 7）
@@ -401,7 +418,7 @@ func TestSyncInitial(t *testing.T) {
 				wantStderr: func(config.Paths) string {
 					return "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookAmbiguous.ID + " (unexpected notebook structure)\n"
 				},
-				wantRequests: initialReadRequests,
+				wantRequests: initialAppliedRequests,
 			},
 		}
 		for _, tt := range tests {
@@ -411,6 +428,9 @@ func TestSyncInitial(t *testing.T) {
 				t.Setenv(secrets.EnvNotionToken, tt.token)
 				stubSyncPrompter(t, "y\n", true)
 				b := newInitialBrowser()
+				if tt.highlightErr != nil {
+					b.books = initialBooksWithAmbiguous // 予定の算出が Highlight を取らない Book だけが、取得のループで初めて失敗する
+				}
 				if tt.pageHTML != nil {
 					b.pageHTML = tt.pageHTML
 				}
@@ -445,18 +465,19 @@ func TestSyncInitial(t *testing.T) {
 				// 問いが出れば N で止まる
 				stubSyncPrompter(t, "N\n", terminal)
 				b := newInitialBrowser()
-				b.books = []domain.Book{dryRunBookExact, dryRunBookAmbiguous}
+				b.books = []domain.Book{dryRunBookExact}
 				stubBrowser(t, b, nil)
 
 				code, stderr := runSync(t)
 				if code != 0 || stderr != "" {
 					t.Errorf("run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
 				}
-				want := []domain.Book{dryRunBookExact, dryRunBookExact, dryRunBookAmbiguous}
+				want := []domain.Book{dryRunBookExact, dryRunBookExact}
 				if !slices.Equal(b.hlBooks, want) {
 					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
 				}
-				assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath)
+				// 作成・Adopt する Book が無くても、実行は同期先を組み直して照合する
+				assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath)
 				if !initialSyncRecorded(t, p) {
 					t.Error("initial_sync_completed_at not recorded")
 				}
@@ -515,7 +536,7 @@ func TestSyncInitial(t *testing.T) {
 				markErr:    stateErr,
 				books:      slices.Concat(initialBooks, []domain.Book{dryRunBookNoASIN}),
 				wantCode:   7,
-				wantStderr: wantInitialPrompt + "source format error: sync: highlights of 1 of 5 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
+				wantStderr: wantInitialPrompt + "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
 			},
 		}
 		for _, tt := range tests {
