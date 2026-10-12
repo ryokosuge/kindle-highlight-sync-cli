@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -137,67 +136,57 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 		}
 	}
 	// 確認（Initial Sync なら）を通ったあと、Initial Sync かどうかにかかわらず none の Book は作成し、adoptable の Book は Adopt し、
-	// ページが決まった Book には既知を除いた Highlight を追記する（§51 / §24）。
-	// 1 冊だけの構造の異常と ASIN の無い Book は Book ID と種類を集めて残りの Book を続け、取り終えて 1 冊でもあれば SourceFormat（exit 7）で終わる（§72）。
-	// 全 Book に共通の枠の異常（source.ErrHighlightsFrame。§73）とそれ以外の失敗（取得の失敗・ctx の取消）は、その時点で種類を変えずに返す。
-	// ambiguous の skip と書き込み・追記の失敗は、exit 7 の後ろで exit 8 にする
-	applied, failed, err := applyBooks(ctx, a, books, b)
+	// ページが決まった Book には既知を除いた Highlight を追記する（§51 / §24）。Highlight は ApplyBooks が Book ごとに取る。
+	// 取得の失敗の仕分けは ApplyBooks に任せる。1 冊だけの構造の異常とタイムアウトは Failed に載って続き、
+	// 全 Book に共通の枠の異常（§73）・ブラウザの失敗・ctx の取消・ローカル状態の不整合は種類を変えずにここへ返る
+	applied, noASIN, err := applyBooks(ctx, a, books, b)
 	if err != nil {
 		return err
 	}
 	// 確認を通過して取得を終えた run は、success でも Book 単位の失敗（partial、§72）でも閉じたあとに記録する（上の defer）。
 	// 全 Book に共通の失敗はここに届かず記録しない
 	record = !synced
+	// 取得に失敗した Book と ASIN の無い Book（exit 7）、skip と書き込み・追記の失敗（exit 8）を分け、両方あれば exit 7 を返す
+	failed := noASIN
+	var written []syncengine.BookFailure
+	for _, f := range applied.Failed {
+		if f.Kind == syncengine.BookFailureFetch {
+			failed = append(failed, bookFailure{BookID: f.BookID, Kind: bookFailureSourceFormat})
+			continue
+		}
+		written = append(written, f)
+	}
 	if len(failed) > 0 {
-		// ASIN の無い Book（exit 7）と skip・書き込みの失敗（exit 8）が両方あれば exit 7 を返す
 		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
 	}
+	applied.Failed = written
 	return applied.PartialFailure()
 }
 
 // applyBooks は ASIN の無い Book を失敗に数えて除き、残りの Book ごとに作成・Adopt・追記を実行し、件数を a.out に出す。
-// Highlight は ApplyBooks が Book ごとに取る。1 冊だけの構造の異常は失敗として返す一覧に集め、その Book の追記は行わない。
 // 同期先の組み立て（exit 3）と照合・書き込みの fatal な失敗（exit 4）、全 Book に共通の取得の失敗は種類を変えずに返す。
-// skip・Book 単位の書き込みの失敗は結果に残し、呼び出し側が PartialFailure で exit 8 にする。
+// skip・Book 単位の失敗は結果に残し、呼び出し側が exit 7 / exit 8 に仕分ける。
 func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser) (syncengine.ApplyResult, []bookFailure, error) {
 	dst, err := newDestination(a)
 	if err != nil {
 		return syncengine.ApplyResult{}, nil, err
 	}
-	var failed []bookFailure
+	var noASIN []bookFailure
 	targets := make([]domain.Book, 0, len(books))
 	for _, book := range books {
 		if book.ASIN == "" {
 			// Highlight のページは ASIN でしか開けない。黙って飛ばすと取りこぼしに気づけないので失敗に数える
-			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
+			noASIN = append(noASIN, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
 			continue
 		}
 		targets = append(targets, book)
 	}
-	lister := &formatFailureLister{src: src}
-	result, err := syncengine.ApplyBooks(ctx, targets, lister, dst)
-	failed = append(failed, lister.failed...)
+	result, err := syncengine.ApplyBooks(ctx, targets, src, dst)
 	// fatal な失敗で止まっても、そこまでに書いた分は Notion に残るので件数を出してから error を返す
 	if werr := writeApplyResult(a.out, result); err == nil {
 		err = werr
 	}
-	return result, failed, err
-}
-
-// formatFailureLister は ListHighlights の 1 冊だけの構造の異常を failed に記録して Highlight 0 件として返す。
-// それ以外の失敗（全 Book に共通の枠の異常・ブラウザの失敗・ctx の取消）はそのまま返し、ApplyBooks が種類を保って止める。
-type formatFailureLister struct {
-	src    browser
-	failed []bookFailure
-}
-
-func (l *formatFailureLister) ListHighlights(ctx context.Context, book domain.Book) ([]domain.Highlight, error) {
-	hs, err := l.src.ListHighlights(ctx, book)
-	if errors.Is(err, source.ErrSourceFormat) && !errors.Is(err, source.ErrHighlightsFrame) {
-		l.failed = append(l.failed, bookFailure{BookID: book.ID, Kind: bookFailureSourceFormat})
-		return nil, nil
-	}
-	return hs, err
+	return result, noASIN, err
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。
