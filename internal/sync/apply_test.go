@@ -28,7 +28,22 @@ type fakeState struct {
 	saveErr   error                                      // SaveHighlights が返す error（行は保存しない）
 	listCalls []string
 	saves     [][]state.HighlightState
-	saveCtxs  []error // SaveHighlights が受け取った context の Err()
+	saveCtxs  []error                    // SaveHighlights が受け取った context の Err()
+	books     map[string]state.BookState // Book ID → books の行。MarkBookSynced で上書きする
+	marks     []state.BookState          // MarkBookSynced に渡った行の順
+	markErr   error                      // MarkBookSynced が返す error（行は記録しない）
+}
+
+func (f *fakeState) MarkBookSynced(_ context.Context, b state.BookState) error {
+	f.marks = append(f.marks, b)
+	if f.markErr != nil {
+		return f.markErr
+	}
+	if f.books == nil {
+		f.books = make(map[string]state.BookState)
+	}
+	f.books[b.KindleBookID] = b
+	return nil
 }
 
 func (f *fakeState) ListHighlightIDs(_ context.Context, bookID string) (map[string]state.HighlightState, error) {
@@ -822,4 +837,112 @@ func TestApplyBooksStateTwice(t *testing.T) {
 	if want := []string{"page-exact"}; !slices.Equal(dst.listCalls, want) {
 		t.Errorf("listCalls = %v, want %v", dst.listCalls, want)
 	}
+}
+
+func TestApplyBooksMarkSynced(t *testing.T) {
+	annotated := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)
+	earlier := applyNow.Add(-24 * time.Hour)
+	// applyBooks と同じ照合の 4 冊に、記録に入る ASIN と Last Annotated Date を足したもの
+	books := make([]domain.Book, len(applyBooks))
+	for i, b := range applyBooks {
+		b.ASIN = "asin-" + b.ID
+		b.LastAnnotatedAt = &annotated
+		books[i] = b
+	}
+	mark := func(id, page string) state.BookState {
+		return state.BookState{KindleBookID: id, DestinationBookID: page, ASIN: "asin-" + id, Title: map[string]string{"book-new": "New Book", "book-adopt": "Adopt Book", "book-exact": "Exact Book"}[id], LastAnnotatedAt: &annotated, LastSyncedAt: applyNow}
+	}
+	allThree := map[string][]domain.Highlight{}
+	for _, b := range books {
+		allThree[b.ID] = applyHighlights("a-1", "a-2", "a-3")
+	}
+	prior := state.BookState{KindleBookID: "book-exact", DestinationBookID: "page-exact", LastSyncedAt: earlier}
+	tests := []struct {
+		name         string
+		noHighlights bool
+		writeErrs    map[string]error
+		srcErrs      map[string]error
+		appendErrs   map[string]error
+		appended     map[string]int
+		markErr      error
+		wantMarks    []state.BookState
+		wantBooks    map[string]state.BookState
+		wantCode     int
+	}{
+		{
+			name:      "追記がすべて成功した Book は記録され、ambiguous は記録されない",
+			wantMarks: []state.BookState{mark("book-new", "page-book-new"), mark("book-adopt", "page-adopt"), mark("book-exact", "page-exact")},
+		},
+		{
+			name:         "追記するものが無かった Book も記録される",
+			noHighlights: true,
+			wantMarks:    []state.BookState{mark("book-new", "page-book-new"), mark("book-adopt", "page-adopt"), mark("book-exact", "page-exact")},
+		},
+		{
+			name:       "追記が一部だけ成功した Book は記録されず、前回の記録も変わらない",
+			appendErrs: map[string]error{"page-exact": notionTimeoutError},
+			appended:   map[string]int{"page-exact": 1},
+			wantMarks:  []state.BookState{mark("book-new", "page-book-new"), mark("book-adopt", "page-adopt")},
+			wantBooks:  map[string]state.BookState{"book-exact": prior},
+		},
+		{
+			name:      "Highlight の取得が失敗した Book は記録されず、前回の記録も変わらない",
+			srcErrs:   map[string]error{"book-exact": fmt.Errorf("list: %w", context.DeadlineExceeded)},
+			wantMarks: []state.BookState{mark("book-new", "page-book-new"), mark("book-adopt", "page-adopt")},
+			wantBooks: map[string]state.BookState{"book-exact": prior},
+		},
+		{
+			name:      "作成と Adopt に失敗した Book は記録されない",
+			writeErrs: map[string]error{"book-new": notionStatusError(http.StatusInternalServerError), "book-adopt": notionStatusError(http.StatusBadRequest)},
+			wantMarks: []state.BookState{mark("book-exact", "page-exact")},
+		},
+		{
+			name:      "記録が失敗したら残りの Book を書かずに LocalState で返す",
+			markErr:   exitcode.New(exitcode.LocalState, errors.New("disk full")),
+			wantMarks: []state.BookState{mark("book-new", "page-book-new")},
+			wantCode:  int(exitcode.LocalState),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			src := &fakeSource{highlights: allThree, errs: tt.srcErrs}
+			if tt.noHighlights {
+				src.highlights = nil
+			}
+			dst := &fakeDestination{matches: applyMatches, writeErrs: tt.writeErrs, appendErrs: tt.appendErrs, appendedBeforeErr: tt.appended}
+			st := &fakeState{markErr: tt.markErr, books: map[string]state.BookState{"book-exact": prior}}
+			_, err := ApplyBooks(context.Background(), books, src, dst, st, applyNow)
+			if got := exitcode.Code(err); got != tt.wantCode {
+				t.Errorf("exitcode.Code(err) = %d, want %d (err = %v)", got, tt.wantCode, err)
+			}
+			if !reflect.DeepEqual(st.marks, tt.wantMarks) {
+				t.Errorf("marks = %v, want %v", st.marks, tt.wantMarks)
+			}
+			for id, want := range tt.wantBooks {
+				if got := st.books[id]; !reflect.DeepEqual(got, want) {
+					t.Errorf("books[%q] = %v, want %v", id, got, want)
+				}
+			}
+		})
+	}
+
+	t.Run("1 回目に追記が一部失敗した Book は 2 回目に残りが追記されると記録される", func(t *testing.T) {
+		exact := []domain.Book{books[2]}
+		src := &fakeSource{highlights: allThree}
+		dst := &fakeDestination{matches: applyMatches, appendErrs: map[string]error{"page-exact": notionTimeoutError}, appendedBeforeErr: map[string]int{"page-exact": 1}}
+		st := &fakeState{}
+		if _, err := ApplyBooks(context.Background(), exact, src, dst, st, applyNow); err != nil {
+			t.Fatalf("ApplyBooks() 1 回目 error = %v", err)
+		}
+		if len(st.marks) != 0 {
+			t.Fatalf("1 回目の marks = %v, want 空", st.marks)
+		}
+		dst.appendErrs = nil
+		if _, err := ApplyBooks(context.Background(), exact, src, dst, st, applyNow); err != nil {
+			t.Fatalf("ApplyBooks() 2 回目 error = %v", err)
+		}
+		if want := []state.BookState{mark("book-exact", "page-exact")}; !reflect.DeepEqual(st.marks, want) {
+			t.Errorf("2 回目の marks = %v, want %v", st.marks, want)
+		}
+	})
 }
