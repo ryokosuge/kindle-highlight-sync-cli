@@ -730,6 +730,13 @@ func TestApplyBooksState(t *testing.T) {
 			wantCode:     1,
 		},
 		{
+			name:     "State の読み取りが DeadlineExceeded で失敗したら、残りの Book を書かずに exitcode.LocalState の error を返す",
+			books:    applyBooks[1:3],
+			listErrs: map[string]error{"book-adopt": exitcode.New(exitcode.LocalState, fmt.Errorf("state: begin: %w", context.DeadlineExceeded))},
+			want:     ApplyResult{Adopted: []string{"book-adopt"}},
+			wantCode: 6,
+		},
+		{
 			name:        "State の保存が失敗したら、残りの Book を書かずに exitcode.LocalState の error を返す",
 			books:       applyBooks[:3],
 			saveErr:     errors.New("state: commit"),
