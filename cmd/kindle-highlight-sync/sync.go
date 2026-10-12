@@ -185,12 +185,19 @@ func applyBooks(ctx context.Context, a *app, books []domain.Book) (syncengine.Ap
 			targets = append(targets, book)
 		}
 	}
-	result, err := syncengine.ApplyBooks(ctx, targets, dst)
+	result, err := syncengine.ApplyBooks(ctx, targets, noHighlights{}, dst)
 	// fatal な失敗で止まっても、そこまでに書いた分は Notion に残るので件数を出してから error を返す
 	if werr := writeApplyResult(a.out, result); err == nil {
 		err = werr
 	}
 	return result, err
+}
+
+// noHighlights は Highlight を返さない Source。通常の sync への追記の配線までの間、ApplyBooks に渡して作成・Adopt だけを行わせる。
+type noHighlights struct{}
+
+func (noHighlights) ListHighlights(context.Context, domain.Book) ([]domain.Highlight, error) {
+	return nil, nil
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。
