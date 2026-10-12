@@ -110,6 +110,39 @@ func TestBookIndexMatch(t *testing.T) {
 			wantStatus: "exact",
 			wantID:     "page-title",
 		},
+		{
+			name: "Update で author / asin を書いたページは、その Book ID の Book と exact のまま",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", ""),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, kindleBook(testASIN, "Go", "Alan").ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+					ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook(testASIN, "Go", "Alan"),
+			wantStatus:       "exact",
+			wantID:           "page-title",
+		},
+		{
+			name: "Update で author / asin を書いたページは、同じ Title+Author の別の Book の候補に戻らない",
+			pages: []IndexedBook{
+				page("page-title", "", "", "Go", ""),
+			},
+			update: func(ix *BookIndex) {
+				ix.Adopt(RemoteBook{ID: "page-title"}, kindleBook(testASIN, "Go", "Alan").ID)
+				ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
+					Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
+					ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
+				})
+			},
+			hasAuthorMapping: true,
+			book:             kindleBook("", "Go", "Alan"),
+			wantStatus:       "none",
+		},
 		// ASIN の段
 		{
 			name: "Kindle ID Property が空で ASIN が一致すれば Title+Author が一致する別のページより優先して adoptable",
@@ -526,23 +559,5 @@ func TestBookIndexLookup(t *testing.T) {
 				t.Errorf("Lookup() = %+v, want %+v", got, tt.want)
 			}
 		})
-	}
-}
-
-// TestBookIndexUpdateKeepsMatch は Update のあとも Kindle ID Property の照合が exact のままで、他の Book の候補に戻らないことを確かめる。
-func TestBookIndexUpdateKeepsMatch(t *testing.T) {
-	book := kindleBook(testASIN, "Go", "Alan")
-	ix := NewBookIndex([]IndexedBook{page("page-title", "", "", "Go", "")}, true)
-	ix.Adopt(RemoteBook{ID: "page-title"}, book.ID)
-	ix.Update(RemoteBook{ID: "page-title"}, BookPropertyValues{
-		Author: &TextPropertyValue{PropertyID: authorPropertyID, Value: "Alan"},
-		ASIN:   &TextPropertyValue{PropertyID: asinPropertyID, Value: testASIN},
-	})
-
-	if got := ix.Match(book); got.Status != BookMatchExact || got.Book == nil || got.Book.ID != "page-title" {
-		t.Errorf("Match(book) = %+v, want exact page-title", got)
-	}
-	if got := ix.Match(kindleBook("", "Go", "Alan")); got.Status != BookMatchNone {
-		t.Errorf("Match(other book with the same Title+Author).Status = %q, want %q", got.Status, BookMatchNone)
 	}
 }
