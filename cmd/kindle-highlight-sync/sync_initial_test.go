@@ -44,11 +44,11 @@ var (
 	// Highlight を持つ Book（exact・none・adoptable）のページには、既知を除いて追記する。exact は既知を読んでから追記し、作成したページは既知を読まずに追記し、Adopt したページは Adopt のあとに既知を読んで追記する
 	initialApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath, "PATCH " + testDryRunBlocksPath,
 		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath, "PATCH " + testInitialAdoptBlocksPath}
-	// 続く sync の実行の要求。exact のページには追記済みなので追記は無く、同じ Data Source を返す Notion では none の Book をまた作成して追記する
-	initialSecondApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
-		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath}
-	initialSecondApplyRequestsNewBookFailed = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
-		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath}
+	// 続く sync の実行の要求。exact / adopt のページの Highlight は State に保存済みなので Notion の一覧も追記も無く、同じ Data Source を返す Notion では none の Book をまた作成して追記する
+	initialSecondApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact",
+		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt"}
+	initialSecondApplyRequestsNewBookFailed = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact",
+		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
 	// none の Book の Highlight の取得が失敗したときの実行の要求。作成までで追記は無い
 	initialApplyRequestsNewBookFailed = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath, "PATCH " + testDryRunBlocksPath,
 		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt", "GET " + testInitialAdoptBlocksPath, "PATCH " + testInitialAdoptBlocksPath}

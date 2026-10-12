@@ -8,13 +8,63 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/destination"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/notion"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/state"
 )
+
+// applyNow は LastSyncedAt に入る同期の時刻。
+var applyNow = time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+
+// fakeState は highlightStore のテストダブル。SaveHighlights で渡された行を saves に Book 単位で記録し、以後の ListHighlightIDs に返す。
+type fakeState struct {
+	rows      map[string]map[string]state.HighlightState // Book ID → Highlight ID → 行
+	listErrs  map[string]error                           // Book ID ごとに ListHighlightIDs が返す error
+	saveErr   error                                      // SaveHighlights が返す error（行は保存しない）
+	listCalls []string
+	saves     [][]state.HighlightState
+	saveCtxs  []error // SaveHighlights が受け取った context の Err()
+}
+
+func (f *fakeState) ListHighlightIDs(_ context.Context, bookID string) (map[string]state.HighlightState, error) {
+	f.listCalls = append(f.listCalls, bookID)
+	if err, ok := f.listErrs[bookID]; ok {
+		return nil, err
+	}
+	got := make(map[string]state.HighlightState)
+	for id, row := range f.rows[bookID] {
+		got[id] = row
+	}
+	return got, nil
+}
+
+func (f *fakeState) SaveHighlights(ctx context.Context, states []state.HighlightState) error {
+	f.saves = append(f.saves, states)
+	f.saveCtxs = append(f.saveCtxs, ctx.Err())
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	if f.rows == nil {
+		f.rows = make(map[string]map[string]state.HighlightState)
+	}
+	for _, st := range states {
+		if f.rows[st.KindleBookID] == nil {
+			f.rows[st.KindleBookID] = make(map[string]state.HighlightState)
+		}
+		f.rows[st.KindleBookID][st.KindleHighlightID] = st
+	}
+	return nil
+}
+
+// stateRow は at に同期した、Book の Highlight の State の行。Block ID は fakeDestination が返す "block-<Highlight ID>" の形。
+func stateRow(bookID, highlightID, blockID string) state.HighlightState {
+	return state.HighlightState{KindleHighlightID: highlightID, KindleBookID: bookID, DestinationHighlightID: blockID, LastSyncedAt: applyNow}
+}
 
 // applyBooks は照合の結果が none / adoptable / exact / ambiguous の順に並ぶ 4 冊。タイトルは文言に出ないことを確かめるために入れる。
 var applyBooks = []domain.Book{
@@ -237,7 +287,7 @@ func TestApplyBooks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			dst := &fakeDestination{matches: tt.matches, errs: tt.findErrs, writeErrs: tt.writeErrs}
 
-			got, err := ApplyBooks(context.Background(), tt.books, &fakeSource{}, dst)
+			got, err := ApplyBooks(context.Background(), tt.books, &fakeSource{}, dst, &fakeState{}, applyNow)
 			if code := exitcode.Code(err); code != tt.wantCode {
 				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", code, tt.wantCode, err)
 			}
@@ -509,7 +559,7 @@ func TestApplyBooksAppend(t *testing.T) {
 				src.highlights = nil
 			}
 
-			got, err := ApplyBooks(context.Background(), applyBooks, src, dst)
+			got, err := ApplyBooks(context.Background(), applyBooks, src, dst, &fakeState{}, applyNow)
 			if code := exitcode.Code(err); code != tt.wantCode {
 				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", code, tt.wantCode, err)
 			}
@@ -578,5 +628,198 @@ func TestApplyResultPartialFailure(t *testing.T) {
 				t.Errorf("err = %q, want %q", err.Error(), tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestApplyBooksState(t *testing.T) {
+	exactBook := []domain.Book{applyBooks[2]}
+	tests := []struct {
+		name          string
+		books         []domain.Book
+		rows          map[string]map[string]state.HighlightState
+		remoteIDs     map[string][]string
+		appendErrs    map[string]error
+		appendedFirst map[string]int
+		listErrs      map[string]error
+		saveErr       error
+		canceled      bool // ApplyBooks にキャンセル済みの context を渡す
+		wantCanceled  bool // 返る error が context.Canceled であること
+		want          ApplyResult
+		wantAppends   map[string][]string
+		wantDstList   []string
+		wantSaves     [][]state.HighlightState
+		wantCode      int
+	}{
+		{
+			name:  "Kindle の Highlight がすべて State にある Book は Notion の一覧も追記も呼ばず、保存もしない",
+			books: exactBook,
+			rows: map[string]map[string]state.HighlightState{"book-exact": {
+				"a-1": stateRow("book-exact", "a-1", "b-1"), "a-2": stateRow("book-exact", "a-2", "b-2"), "a-3": stateRow("book-exact", "a-3", "b-3"),
+			}},
+			want: ApplyResult{Exact: []string{"book-exact"}},
+		},
+		{
+			name:        "State に無い Highlight がある Book は Notion の一覧を取り、State にも Notion にも無い分だけを追記して、Notion にあった分と追記した分を 1 回で保存する",
+			books:       exactBook,
+			rows:        map[string]map[string]state.HighlightState{"book-exact": {"a-1": stateRow("book-exact", "a-1", "b-1")}},
+			remoteIDs:   map[string][]string{"page-exact": {"a-1", "a-2"}},
+			want:        ApplyResult{Exact: []string{"book-exact"}, Appended: 1},
+			wantAppends: map[string][]string{"page-exact": {"a-3"}},
+			wantDstList: []string{"page-exact"},
+			wantSaves: [][]state.HighlightState{{
+				stateRow("book-exact", "a-2", "block-1"), stateRow("book-exact", "a-3", "block-a-3"),
+			}},
+		},
+		{
+			name:        "作成した Book は State も Notion の一覧も見ず、追記した全部を保存する",
+			books:       applyBooks[:1],
+			want:        ApplyResult{Created: []string{"book-new"}, Appended: 3},
+			wantAppends: map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}},
+			wantSaves: [][]state.HighlightState{{
+				stateRow("book-new", "a-1", "block-a-1"), stateRow("book-new", "a-2", "block-a-2"), stateRow("book-new", "a-3", "block-a-3"),
+			}},
+		},
+		{
+			name:          "追記が一部だけ成功した Book は成功した分だけを保存してから、失敗を Failed に残す",
+			books:         exactBook,
+			appendErrs:    map[string]error{"page-exact": notionStatusError(http.StatusBadGateway)},
+			appendedFirst: map[string]int{"page-exact": 2},
+			want:          ApplyResult{Exact: []string{"book-exact"}, Failed: []BookFailure{{BookID: "book-exact", Kind: BookFailureAppend}}, Appended: 2},
+			wantAppends:   map[string][]string{"page-exact": {"a-1", "a-2", "a-3"}},
+			wantDstList:   []string{"page-exact"},
+			wantSaves:     [][]state.HighlightState{{stateRow("book-exact", "a-1", "block-a-1"), stateRow("book-exact", "a-2", "block-a-2")}},
+		},
+		{
+			name:          "追記が 401 で失敗しても成功した分を保存してから exitcode.Notion の error を返す",
+			books:         exactBook,
+			appendErrs:    map[string]error{"page-exact": notionStatusError(http.StatusUnauthorized)},
+			appendedFirst: map[string]int{"page-exact": 1},
+			want:          ApplyResult{Exact: []string{"book-exact"}, Appended: 1},
+			wantAppends:   map[string][]string{"page-exact": {"a-1", "a-2", "a-3"}},
+			wantDstList:   []string{"page-exact"},
+			wantSaves:     [][]state.HighlightState{{stateRow("book-exact", "a-1", "block-a-1")}},
+			wantCode:      4,
+		},
+		{
+			name:          "追記が部分成功してキャンセルされても、キャンセルされていない context で成功した分を保存し、元のキャンセルの error を返す",
+			books:         exactBook,
+			canceled:      true,
+			appendErrs:    map[string]error{"page-exact": notionCanceledError},
+			appendedFirst: map[string]int{"page-exact": 2},
+			want:          ApplyResult{Exact: []string{"book-exact"}, Appended: 2},
+			wantAppends:   map[string][]string{"page-exact": {"a-1", "a-2", "a-3"}},
+			wantDstList:   []string{"page-exact"},
+			wantSaves:     [][]state.HighlightState{{stateRow("book-exact", "a-1", "block-a-1"), stateRow("book-exact", "a-2", "block-a-2")}},
+			wantCanceled:  true,
+			wantCode:      4, // fail は Notion client が返した元の error をそのまま返す（LocalState の 6 ではない）
+		},
+		{
+			name:     "State の読み取りが失敗したら、残りの Book を書かずに exitcode.LocalState の error を返す",
+			books:    applyBooks[1:3],
+			listErrs: map[string]error{"book-adopt": errors.New("state: open state.db")},
+			want:     ApplyResult{Adopted: []string{"book-adopt"}},
+			wantCode: 6,
+		},
+		{
+			name:         "State の読み取りがキャンセルで失敗したら exitcode.LocalState に変えず、残りの Book を書かずに中断の error を返す",
+			books:        applyBooks[1:3],
+			canceled:     true,
+			listErrs:     map[string]error{"book-adopt": exitcode.New(exitcode.LocalState, fmt.Errorf("state: begin: %w", context.Canceled))},
+			want:         ApplyResult{Adopted: []string{"book-adopt"}},
+			wantCanceled: true,
+			wantCode:     1,
+		},
+		{
+			name:     "State の読み取りが DeadlineExceeded で失敗したら、残りの Book を書かずに exitcode.LocalState の error を返す",
+			books:    applyBooks[1:3],
+			listErrs: map[string]error{"book-adopt": exitcode.New(exitcode.LocalState, fmt.Errorf("state: begin: %w", context.DeadlineExceeded))},
+			want:     ApplyResult{Adopted: []string{"book-adopt"}},
+			wantCode: 6,
+		},
+		{
+			name:        "State の保存が失敗したら、残りの Book を書かずに exitcode.LocalState の error を返す",
+			books:       applyBooks[:3],
+			saveErr:     errors.New("state: commit"),
+			want:        ApplyResult{Created: []string{"book-new"}, Appended: 3},
+			wantAppends: map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}},
+			wantSaves: [][]state.HighlightState{{
+				stateRow("book-new", "a-1", "block-a-1"), stateRow("book-new", "a-2", "block-a-2"), stateRow("book-new", "a-3", "block-a-3"),
+			}},
+			wantCode: 6,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := &fakeDestination{
+				matches: applyMatches, remoteIDs: tt.remoteIDs,
+				appendErrs: tt.appendErrs, appendedBeforeErr: tt.appendedFirst,
+			}
+			src := &fakeSource{highlights: map[string][]domain.Highlight{}}
+			for _, b := range applyBooks {
+				src.highlights[b.ID] = applyHighlights("a-1", "a-2", "a-3")
+			}
+			st := &fakeState{rows: tt.rows, listErrs: tt.listErrs, saveErr: tt.saveErr}
+
+			ctx := context.Background()
+			if tt.canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			got, err := ApplyBooks(ctx, tt.books, src, dst, st, applyNow)
+			if code := exitcode.Code(err); code != tt.wantCode {
+				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", code, tt.wantCode, err)
+			}
+			if gotCanceled := errors.Is(err, context.Canceled); gotCanceled != tt.wantCanceled {
+				t.Errorf("errors.Is(err, context.Canceled) = %v, want %v (err = %v)", gotCanceled, tt.wantCanceled, err)
+			}
+			for i, ctxErr := range st.saveCtxs {
+				if ctxErr != nil {
+					t.Errorf("SaveHighlights の context.Err() [%d] = %v, want %v", i, ctxErr, nil)
+				}
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ApplyBooks() = %+v, want %+v", got, tt.want)
+			}
+			if !reflect.DeepEqual(dst.appends, tt.wantAppends) {
+				t.Errorf("appends = %v, want %v", dst.appends, tt.wantAppends)
+			}
+			if !slices.Equal(dst.listCalls, tt.wantDstList) {
+				t.Errorf("listCalls = %v, want %v", dst.listCalls, tt.wantDstList)
+			}
+			if !reflect.DeepEqual(st.saves, tt.wantSaves) {
+				t.Errorf("saves = %v, want %v", st.saves, tt.wantSaves)
+			}
+		})
+	}
+}
+
+func TestApplyBooksStateTwice(t *testing.T) {
+	books := []domain.Book{applyBooks[2]}
+	dst := &fakeDestination{matches: applyMatches}
+	src := &fakeSource{highlights: map[string][]domain.Highlight{"book-exact": applyHighlights("a-1", "a-2")}}
+	st := &fakeState{}
+
+	first, err := ApplyBooks(context.Background(), books, src, dst, st, applyNow)
+	if err != nil {
+		t.Fatalf("ApplyBooks() 1 回目 error = %v", err)
+	}
+	if first.Appended != 2 {
+		t.Errorf("1 回目の Appended = %d, want %d", first.Appended, 2)
+	}
+	appendsAfterFirst := len(dst.appends["page-exact"])
+
+	second, err := ApplyBooks(context.Background(), books, src, dst, st, applyNow)
+	if err != nil {
+		t.Fatalf("ApplyBooks() 2 回目 error = %v", err)
+	}
+	if second.Appended != 0 {
+		t.Errorf("2 回目の Appended = %d, want %d", second.Appended, 0)
+	}
+	if got := len(dst.appends["page-exact"]); got != appendsAfterFirst {
+		t.Errorf("2 回目の追記した Highlight の数 = %d, want %d", got-appendsAfterFirst, 0)
+	}
+	if want := []string{"page-exact"}; !slices.Equal(dst.listCalls, want) {
+		t.Errorf("listCalls = %v, want %v", dst.listCalls, want)
 	}
 }
