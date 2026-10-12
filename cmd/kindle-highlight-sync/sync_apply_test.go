@@ -18,6 +18,9 @@ import (
 // applyAdoptPath は apply の fixture で adoptable になる Book のページを更新する path。
 const applyAdoptPath = testPagesPath + "/page-adopt"
 
+// applyExactPath は apply の fixture で exact になる Book のページを更新する path。
+const applyExactPath = testPagesPath + "/page-exact"
+
 // applyReplies は initialReplies に、作成・Adopt の応答を足した Notion の応答。
 func applyReplies() map[string]string {
 	return initialReplies()
@@ -63,7 +66,7 @@ func TestSyncApply(t *testing.T) {
 			}
 		}
 		// Book ごとに 1 回ずつ
-		if got, want := writeRequests(requests()), []string{"POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
+		if got, want := writeRequests(requests()), []string{"PATCH " + applyExactPath, "POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
 			t.Errorf("write requests = %q, want %q", got, want)
 		}
 		if !initialSyncRecorded(t, p) {
@@ -87,7 +90,7 @@ func TestSyncApply(t *testing.T) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		// 書き込みは none と adoptable の Book の 2 回だけで、ambiguous の Book の分は無い
-		if got, want := writeRequests(requests()), []string{"POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
+		if got, want := writeRequests(requests()), []string{"PATCH " + applyExactPath, "POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
 			t.Errorf("write requests = %q, want %q", got, want)
 		}
 		if !initialSyncRecorded(t, p) {
@@ -95,7 +98,7 @@ func TestSyncApply(t *testing.T) {
 		}
 	})
 
-	t.Run("作成・Adopt したページを返す Notion で続けて sync すると、それらの Book は exact と照合されて書き込まない", func(t *testing.T) {
+	t.Run("作成・Adopt したページを返す Notion で続けて sync すると、それらの Book は exact と照合されて作成・Adopt はせず、UpdateBook だけを呼ぶ", func(t *testing.T) {
 		p := setupXDG(t, validConfigTOML)
 		replies := applyReplies()
 		stubSyncPrompter(t, "", false)
@@ -104,7 +107,7 @@ func TestSyncApply(t *testing.T) {
 		if code, _, stderr := runSyncApply(t, "--yes"); code != 0 {
 			t.Fatalf("1st run(sync --yes) code = %d, stderr = %q, want 0", code, stderr)
 		}
-		firstWrites := writeRequests(requests())
+		firstWrites := len(writeRequests(requests()))
 
 		// 作成・Adopt 後の Data Source を返す。続く sync はこれらの Book を exact と照合する
 		replies[testDryRunQueryPath] = queryBody(
@@ -112,6 +115,7 @@ func TestSyncApply(t *testing.T) {
 			dryRunPageJSON("page-created", dryRunBookNew.ID, dryRunBookNew.Title),
 			dryRunPageJSON("page-adopt", initialBookAdopt.ID, initialBookAdopt.Title),
 		)
+		replies[testPagesPath+"/page-created"] = `{"object":"page","id":"page-created"}`
 		b2 := newInitialBrowser()
 		stubBrowser(t, b2, nil)
 		code, stdout, stderr := runSyncApply(t)
@@ -121,8 +125,10 @@ func TestSyncApply(t *testing.T) {
 		if got, want := planCells(t, stdout), applyCells("0", "0", "0", "0"); !reflect.DeepEqual(got, want) {
 			t.Errorf("2nd stdout cells = %q, want %q", got, want)
 		}
-		if got := writeRequests(requests()); !slices.Equal(got, firstWrites) {
-			t.Errorf("write requests after 2nd run = %q, want unchanged %q", got, firstWrites)
+		// POST /v1/pages は届かず、exact になった 3 冊のページに PATCH が 1 回ずつ届く
+		want := []string{"PATCH " + applyExactPath, "PATCH " + testPagesPath + "/page-created", "PATCH " + applyAdoptPath}
+		if got := writeRequests(requests())[firstWrites:]; !slices.Equal(got, want) {
+			t.Errorf("write requests in 2nd run = %q, want %q", got, want)
 		}
 		if !initialSyncRecorded(t, p) {
 			t.Error("initial_sync_completed_at not recorded")
@@ -144,7 +150,7 @@ func TestSyncApply(t *testing.T) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		// 予定の算出も確認も行わず、照合の query のあとに書き込む
-		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "POST "+testPagesPath, "PATCH "+applyAdoptPath)
+		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "PATCH "+applyExactPath, "POST "+testPagesPath, "PATCH "+applyAdoptPath)
 	})
 
 	t.Run("ASIN の無い Book は書き込まず、ambiguous の skip と重なっても exit 7 を返す", func(t *testing.T) {
@@ -161,7 +167,7 @@ func TestSyncApply(t *testing.T) {
 		if got, want := planCells(t, stdout), applyCells("1", "1", "1", "0"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
-		if got, want := writeRequests(requests()), []string{"POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
+		if got, want := writeRequests(requests()), []string{"PATCH " + applyExactPath, "POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
 			t.Errorf("write requests = %q, want %q", got, want)
 		}
 	})
@@ -190,7 +196,7 @@ func TestSyncApply(t *testing.T) {
 		t.Setenv(secrets.EnvNotionToken, testDryRunToken)
 		replies := applyReplies()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.Method == http.MethodPatch {
+			if r.Method == http.MethodPatch && r.URL.EscapedPath() == applyAdoptPath {
 				w.WriteHeader(http.StatusNotFound) // Adopt するページに届かない（fatal）
 				_, _ = w.Write([]byte(`{"object":"error","status":404,"code":"object_not_found","message":"missing"}`))
 				return

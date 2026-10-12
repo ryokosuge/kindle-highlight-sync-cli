@@ -38,8 +38,8 @@ var (
 	initialPlanHLBooks = []domain.Book{dryRunBookExact, dryRunBookNew, initialBookAdopt}
 	// 照合の読み取りだけの要求。ページ・Property・block を変える要求（POST /v1/pages 等）は無い
 	initialReadRequests = []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath, "GET " + testInitialAdoptBlocksPath}
-	// 確認を通ったあとの実行の要求。同期先を組み直して全件を取り直し、none の Book を作成し、adoptable の Book を Adopt する
-	initialApplyRequests = []string{"POST " + testDryRunQueryPath, "POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
+	// 確認を通ったあとの実行の要求。同期先を組み直して全件を取り直し、exact の Book を更新し、none の Book を作成し、adoptable の Book を Adopt する
+	initialApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
 	// 確認を通った run が Notion に届ける要求の全体
 	initialAppliedRequests = slices.Concat(initialReadRequests, initialApplyRequests)
 	// 1 冊だけの構造の異常（Book 単位の失敗）と、全 Book に共通の枠の異常（fatal）。形は sync_test.go の bookErr / frameErr と同じ
@@ -476,8 +476,8 @@ func TestSyncInitial(t *testing.T) {
 				if !slices.Equal(b.hlBooks, want) {
 					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
 				}
-				// 作成・Adopt する Book が無くても、実行は同期先を組み直して照合する
-				assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath)
+				// 作成・Adopt する Book が無くても、実行は同期先を組み直して照合し、exact の Book を更新する
+				assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "PATCH "+testPagesPath+"/page-exact")
 				if !initialSyncRecorded(t, p) {
 					t.Error("initial_sync_completed_at not recorded")
 				}

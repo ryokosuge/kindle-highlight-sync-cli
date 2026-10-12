@@ -55,7 +55,7 @@ func TestApplyBooks(t *testing.T) {
 		wantSame   error  // nil 以外なら、ApplyBooks が返す error がこの値そのもの（包んでいない）であることを確かめる
 	}{
 		{
-			name:    "none は CreateBook、adoptable は AdoptBook を呼び、exact は何も書かず、ambiguous は skip する",
+			name:    "none は CreateBook、adoptable は AdoptBook、exact は UpdateBook を呼び、ambiguous は skip する",
 			books:   applyBooks,
 			matches: applyMatches,
 			want: ApplyResult{
@@ -64,7 +64,7 @@ func TestApplyBooks(t *testing.T) {
 				Exact:   []string{"book-exact"},
 				Skipped: []string{"book-ambiguous"},
 			},
-			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
 		{
 			name:    "Book が無ければ何も呼ばず空の結果",
@@ -83,7 +83,7 @@ func TestApplyBooks(t *testing.T) {
 				Skipped: []string{"book-ambiguous"},
 				Failed:  []BookFailure{{BookID: "book-new", Kind: BookFailureCreate}},
 			},
-			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
 		{
 			name:      "AdoptBook が 5xx で失敗しても残りの Book を続け、失敗した Book ID が残る",
@@ -96,7 +96,7 @@ func TestApplyBooks(t *testing.T) {
 				Skipped: []string{"book-ambiguous"},
 				Failed:  []BookFailure{{BookID: "book-adopt", Kind: BookFailureAdopt}},
 			},
-			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
 		{
 			name:      "CreateBook がタイムアウトしても再送せず、残りの Book を続ける",
@@ -109,7 +109,7 @@ func TestApplyBooks(t *testing.T) {
 				Skipped: []string{"book-ambiguous"},
 				Failed:  []BookFailure{{BookID: "book-new", Kind: BookFailureCreate}},
 			},
-			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
 		{
 			name:       "CreateBook が context のキャンセルで失敗したら残りの Book を書かずに元の error をそのまま返す",
@@ -151,6 +151,75 @@ func TestApplyBooks(t *testing.T) {
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
 			wantCode:   4,
 			wantErr:    "sync: adopt failed book-adopt: HTTP 404 Not Found",
+		},
+		{
+			name:      "UpdateBook が 400 で失敗しても残りの Book を続け、失敗した Book ID が残り、exact には数えない",
+			books:     applyBooks,
+			matches:   applyMatches,
+			writeErrs: map[string]error{"book-exact": notionStatusError(http.StatusBadRequest)},
+			want: ApplyResult{
+				Created: []string{"book-new"},
+				Adopted: []string{"book-adopt"},
+				Skipped: []string{"book-ambiguous"},
+				Failed:  []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+			},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
+		},
+		{
+			name:      "UpdateBook が 5xx で失敗しても残りの Book を続け、失敗した Book ID が残る",
+			books:     applyBooks,
+			matches:   applyMatches,
+			writeErrs: map[string]error{"book-exact": notionStatusError(http.StatusBadGateway)},
+			want: ApplyResult{
+				Created: []string{"book-new"},
+				Adopted: []string{"book-adopt"},
+				Skipped: []string{"book-ambiguous"},
+				Failed:  []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+			},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
+		},
+		{
+			name:      "UpdateBook がタイムアウトしても残りの Book を続け、失敗した Book ID が残る",
+			books:     applyBooks,
+			matches:   applyMatches,
+			writeErrs: map[string]error{"book-exact": notionTimeoutError},
+			want: ApplyResult{
+				Created: []string{"book-new"},
+				Adopted: []string{"book-adopt"},
+				Skipped: []string{"book-ambiguous"},
+				Failed:  []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+			},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
+		},
+		{
+			name:       "UpdateBook が 401 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
+			books:      applyBooks,
+			matches:    applyMatches,
+			writeErrs:  map[string]error{"book-exact": notionStatusError(http.StatusUnauthorized)},
+			want:       ApplyResult{Created: []string{"book-new"}, Adopted: []string{"book-adopt"}},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
+			wantCode:   4,
+			wantErr:    "sync: update failed book-exact: HTTP 401 Unauthorized",
+		},
+		{
+			name:       "UpdateBook が 403 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
+			books:      applyBooks,
+			matches:    applyMatches,
+			writeErrs:  map[string]error{"book-exact": notionStatusError(http.StatusForbidden)},
+			want:       ApplyResult{Created: []string{"book-new"}, Adopted: []string{"book-adopt"}},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
+			wantCode:   4,
+			wantErr:    "sync: update failed book-exact: HTTP 403 Forbidden",
+		},
+		{
+			name:       "UpdateBook が 404 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
+			books:      applyBooks,
+			matches:    applyMatches,
+			writeErrs:  map[string]error{"book-exact": notionStatusError(http.StatusNotFound)},
+			want:       ApplyResult{Created: []string{"book-new"}, Adopted: []string{"book-adopt"}},
+			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
+			wantCode:   4,
+			wantErr:    "sync: update failed book-exact: HTTP 404 Not Found",
 		},
 		{
 			name:       "FindBook が失敗したらその時点で exitcode.Notion の error を返す",
