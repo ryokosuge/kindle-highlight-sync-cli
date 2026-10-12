@@ -13,6 +13,7 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/notion"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
 
 // applyBooks は照合の結果が none / adoptable / exact / ambiguous の順に並ぶ 4 冊。タイトルは文言に出ないことを確かめるために入れる。
@@ -256,6 +257,12 @@ func TestApplyBooks(t *testing.T) {
 	}
 }
 
+var (
+	bookFormatError      = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: highlight row: %w", source.ErrSourceFormat))
+	highlightsFrameError = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: highlights page: %w: %w", source.ErrHighlightsFrame, source.ErrSourceFormat))
+	browserError         = exitcode.New(exitcode.Browser, errors.New("browser: page crashed"))
+)
+
 func applyHighlights(ids ...string) []domain.Highlight {
 	hs := make([]domain.Highlight, 0, len(ids))
 	for _, id := range ids {
@@ -378,8 +385,8 @@ func TestApplyBooksAppend(t *testing.T) {
 			wantListCalls: []string{"page-adopt", "page-exact"},
 		},
 		{
-			name:    "Highlight の取得が失敗しても残りの Book を続け、その Book には追記しない",
-			srcErrs: map[string]error{"book-exact": errors.New("source: timeout")},
+			name:    "1 冊だけの構造の異常で Highlight の取得が失敗したら残りの Book を続け、その Book には追記しない",
+			srcErrs: map[string]error{"book-exact": bookFormatError},
 			want: ApplyResult{
 				Created:  []string{"book-new"},
 				Adopted:  []string{"book-adopt"},
@@ -390,6 +397,40 @@ func TestApplyBooksAppend(t *testing.T) {
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
 			wantListCalls: []string{"page-adopt"},
+		},
+		{
+			name:    "ブラウザの失敗で Highlight が取れなければ種類を保って残りの Book を書かずに止める",
+			srcErrs: map[string]error{"book-exact": browserError},
+			want: ApplyResult{
+				Created:  []string{"book-new"},
+				Adopted:  []string{"book-adopt"},
+				Exact:    []string{"book-exact"},
+				Appended: 6,
+			},
+			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
+			wantListCalls: []string{"page-adopt"},
+			wantCode:      5,
+			wantErr:       browserError.Error(),
+		},
+		{
+			name:     "Highlight のページの枠の異常は構造の異常でも全 Book に共通なので種類を保って止める",
+			srcErrs:  map[string]error{"book-new": highlightsFrameError},
+			want:     ApplyResult{Created: []string{"book-new"}},
+			wantCode: 7,
+			wantErr:  highlightsFrameError.Error(),
+		},
+		{
+			name:     "既知の取得がローカル状態の不整合で失敗したら Book 単位の失敗に数えず、種類を保って止める",
+			listErrs: map[string]error{"page-adopt": exitcode.New(exitcode.LocalState, errors.New("sync marker scheme is incompatible"))},
+			want: ApplyResult{
+				Created:  []string{"book-new"},
+				Adopted:  []string{"book-adopt"},
+				Appended: 3,
+			},
+			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}},
+			wantListCalls: []string{"page-adopt"},
+			wantCode:      6,
+			wantErr:       "sync marker scheme is incompatible",
 		},
 		{
 			name:       "追記が 401 で失敗したら残りの Book を書かずに exitcode.Notion の error を返し、それまでの件数は残る",

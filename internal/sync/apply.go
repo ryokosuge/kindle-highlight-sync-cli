@@ -11,6 +11,7 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/notion"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
 
 // BookFailureKind は Book 1 冊の書き込みが失敗した種類。文言には Book ID とこの種類だけを出し、タイトル・token は入れない（§74）。
@@ -171,6 +172,8 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 
 // fail は書き込みの失敗を仕分ける。context のキャンセルなら Book 単位の失敗でも fatal でもなく、元の error をそのまま返して止める
 // （中断時の exit code は呼び出し側が決める）。fatal（§73）なら exitcode.Notion の error を返し、そうでなければ Failed に足して nil を返す。
+// ローカル状態の不整合（exitcode.LocalState）と、Highlight の取得の失敗のうち 1 冊だけの構造の異常でないもの（ブラウザの失敗・ErrHighlightsFrame など）も、
+// 種類を変えない元の error をそのまま返して止める。
 // タイムアウト（context.DeadlineExceeded）はキャンセルに含めず、Book 単位の失敗として続ける（§72）。
 func (r *ApplyResult) fail(bookID string, kind BookFailureKind, err error) error {
 	if errors.Is(err, context.Canceled) {
@@ -179,8 +182,21 @@ func (r *ApplyResult) fail(bookID string, kind BookFailureKind, err error) error
 	if isFatalWrite(err) {
 		return exitcode.New(exitcode.Notion, fmt.Errorf("sync: %s %s: %w", kind, bookID, err))
 	}
+	// ローカル状態の不整合は Book 単位の一時的な失敗ではなく、続けると広がるので種類を保って止める
+	if exitcode.Code(err) == int(exitcode.LocalState) {
+		return err
+	}
+	// Highlight の取得の失敗は、1 冊だけの構造の異常でなければ全 Book に共通（ブラウザ・枠の異常など）なので種類を保って止める
+	if kind == BookFailureFetch && !isBookFormatError(err) {
+		return err
+	}
 	r.Failed = append(r.Failed, BookFailure{BookID: bookID, Kind: kind})
 	return nil
+}
+
+// isBookFormatError は 1 冊だけの構造の異常（ErrSourceFormat のうち、全 Book に共通の枠の異常 ErrHighlightsFrame を除くもの）。
+func isBookFormatError(err error) bool {
+	return errors.Is(err, source.ErrSourceFormat) && !errors.Is(err, source.ErrHighlightsFrame)
 }
 
 // isFatalWrite は Notion の認証の失敗（401 / 403）と Data Source・ページに届かない失敗（404）を fatal とみなす（§73）。
