@@ -2,12 +2,17 @@ package main
 
 import (
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/zalando/go-keyring"
+
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/secrets"
 )
 
 // applyAdoptPath は apply の fixture で adoptable になる Book のページを更新する path。
@@ -176,6 +181,42 @@ func TestSyncApply(t *testing.T) {
 		}
 		if initialSyncRecorded(t, p) {
 			t.Error("initial_sync_completed_at recorded after decline")
+		}
+	})
+
+	t.Run("書き込みが fatal な失敗で止まっても、そこまでに書いた分の件数を出してから exit 4 で終わる", func(t *testing.T) {
+		setupSyncedXDG(t, validConfigTOML)
+		keyring.MockInit()
+		t.Setenv(secrets.EnvNotionToken, testDryRunToken)
+		replies := applyReplies()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodPatch {
+				w.WriteHeader(http.StatusNotFound) // Adopt するページに届かない（fatal）
+				_, _ = w.Write([]byte(`{"object":"error","status":404,"code":"object_not_found","message":"missing"}`))
+				return
+			}
+			if body, ok := replies[r.URL.EscapedPath()]; ok {
+				_, _ = w.Write([]byte(body))
+				return
+			}
+			_, _ = w.Write([]byte("{}"))
+		}))
+		t.Cleanup(srv.Close)
+		stubNewNotionClient(t, srv)
+		stubBrowser(t, newInitialBrowser(), nil)
+
+		code, stdout, stderr := runSyncApply(t)
+		if code != 4 || !strings.HasPrefix(stderr, "Notion error: ") {
+			t.Errorf("run(sync) code = %d, stderr = %q, want 4 with a Notion error", code, stderr)
+		}
+		// none の Book の作成までは済んでいる
+		if got, want := planCells(t, stdout), applyCells("1", "0", "0", "0"); !reflect.DeepEqual(got, want) {
+			t.Errorf("stdout cells = %q, want %q", got, want)
+		}
+		for _, secret := range []string{"Distinctive", testDryRunToken} {
+			if strings.Contains(stdout+stderr, secret) {
+				t.Errorf("output contains %q: stdout = %q, stderr = %q", secret, stdout, stderr)
+			}
 		}
 	})
 }

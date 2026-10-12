@@ -186,10 +186,11 @@ func applyBooks(ctx context.Context, a *app, books []domain.Book) (syncengine.Ap
 		}
 	}
 	result, err := syncengine.ApplyBooks(ctx, targets, dst)
-	if err != nil {
-		return result, err
+	// fatal な失敗で止まっても、そこまでに書いた分は Notion に残るので件数を出してから error を返す
+	if werr := writeApplyResult(a.out, result); err == nil {
+		err = werr
 	}
-	return result, writeApplyResult(a.out, result)
+	return result, err
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。
