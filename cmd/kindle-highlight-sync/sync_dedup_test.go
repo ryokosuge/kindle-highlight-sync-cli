@@ -136,7 +136,7 @@ func TestSyncDedup(t *testing.T) {
 			for i, r := range tt.runs {
 				if r.removeState {
 					if err := os.Remove(p.StateFile()); err != nil {
-						t.Fatal(err)
+						t.Fatalf("os.Remove(state.db) error = %v, want nil", err)
 					}
 				}
 				b := newInitialBrowser()
