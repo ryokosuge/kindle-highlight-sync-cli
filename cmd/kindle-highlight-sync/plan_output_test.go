@@ -171,3 +171,36 @@ func TestWritePlanError(t *testing.T) {
 		}
 	})
 }
+
+// applyCells は writeApplyResult が出す件数の行。
+func applyCells(created, adopted, skipped, failed string) [][]string {
+	return [][]string{{"Created", created}, {"Adopted", adopted}, {"Skipped (ambiguous)", skipped}, {"Failed", failed}}
+}
+
+func TestWriteApplyResult(t *testing.T) {
+	t.Run("作成・Adopt・skip・失敗の件数だけを出し、Book ID は出さない", func(t *testing.T) {
+		r := syncengine.ApplyResult{
+			Created: []string{"B000000001", "B000000002"},
+			Adopted: []string{"B000000003"},
+			Exact:   []string{"B000000004"},
+			Skipped: []string{"B000000005"},
+			Failed:  []syncengine.BookFailure{{BookID: "B000000006", Kind: syncengine.BookFailureCreate}, {BookID: "B000000007", Kind: syncengine.BookFailureAdopt}},
+		}
+		var buf bytes.Buffer
+		if err := writeApplyResult(&buf, r); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := planCells(t, buf.String()), applyCells("2", "1", "1", "2"); !reflect.DeepEqual(got, want) {
+			t.Errorf("writeApplyResult() cells = %q, want %q", got, want)
+		}
+		if strings.Contains(buf.String(), "B0000") {
+			t.Errorf("writeApplyResult() = %q, want no Book ID", buf.String())
+		}
+	})
+
+	t.Run("書き込み先が失敗したら error を返す", func(t *testing.T) {
+		if err := writeApplyResult(&failingWriter{err: errors.New("boom")}, syncengine.ApplyResult{}); err == nil {
+			t.Error("writeApplyResult() error = nil, want error")
+		}
+	})
+}

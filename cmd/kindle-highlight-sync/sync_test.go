@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -37,10 +38,15 @@ func stubReachedBrowser(t *testing.T) (*fakeBrowser, *browserStub) {
 }
 
 // setupSyncedXDG は setupXDG に加えて Initial Sync 済みの State（initial_sync_completed_at あり）を置く。
-// 通常の sync のケースは Initial Sync の予定の算出（config.toml・token・Notion が要る）に入らずに従来の振る舞いを確かめる。
+// 通常の sync も作成・Adopt のために Notion につなぐので、configTOML が空なら validConfigTOML を置き、
+// 照合は空の Data Source、書き込みは成功する Notion の代役（stubWritableNotion）に向ける。
 func setupSyncedXDG(t *testing.T, configTOML string) config.Paths {
 	t.Helper()
+	if configTOML == "" {
+		configTOML = validConfigTOML
+	}
 	p := setupXDG(t, configTOML)
+	stubWritableNotion(t)
 	if err := os.MkdirAll(p.DataDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -50,14 +56,22 @@ func setupSyncedXDG(t *testing.T, configTOML string) config.Paths {
 	return p
 }
 
-// runSync は sync を args 付きで走らせる。通常の sync は標準出力に何も出さない。
+// stubWritableNotion は token を環境変数に置き、Data Source が空で、ページの作成・更新が成功する Notion の代役に newNotionClient を向ける。
+// 受けた要求を返すので、書き込みの要求が届いたかを確かめられる。
+func stubWritableNotion(t *testing.T) func() []recordedRequest {
+	t.Helper()
+	requests, _ := setupDryRunNotion(t, map[string]string{
+		testDryRunQueryPath: queryBody(),
+		"/v1/pages":         `{"object":"page","id":"page-written"}`,
+	})
+	return requests
+}
+
+// runSync は sync を args 付きで走らせる。標準出力は実行の結果の件数なので、返さず確かめない。
 func runSync(t *testing.T, args ...string) (code int, stderr string) {
 	t.Helper()
 	var stdout, stderrBuf bytes.Buffer
 	code = run(append([]string{"sync"}, args...), &stdout, &stderrBuf)
-	if stdout.Len() != 0 {
-		t.Errorf("run(sync) stdout = %q, want empty", stdout.String())
-	}
 	return code, stderrBuf.String()
 }
 
@@ -131,8 +145,8 @@ func TestSync(t *testing.T) {
 
 				var stdout, stderr bytes.Buffer
 				code := run(tt.args, &stdout, &stderr)
-				if stdout.Len() != 0 {
-					t.Errorf("run(%v) stdout = %q, want empty", tt.args, stdout.String())
+				if got, want := planCells(t, stdout.String()), applyCells("0", "0", "0", "0"); !reflect.DeepEqual(got, want) {
+					t.Errorf("run(%v) stdout cells = %q, want %q", tt.args, got, want)
 				}
 				assertSyncSucceeded(t, code, stderr.String(), filepath.Join(p.DataDir, "run.lock"))
 				wantOpts := source.Options{ProfileDir: filepath.Join(p.DataDir, "browser-profile"), Headless: tt.wantHeadless}

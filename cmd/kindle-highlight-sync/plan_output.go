@@ -39,3 +39,19 @@ func writePlan(w io.Writer, p syncengine.Plan) error {
 	_, err := w.Write(buf.Bytes())
 	return err
 }
+
+// writeApplyResult は実行の結果の件数を w に書く。
+// stdout は redact を通さないので件数だけを出し、Book のタイトルや Book ID・error の本文は書かない（§74）。
+func writeApplyResult(w io.Writer, r syncengine.ApplyResult) error {
+	var buf bytes.Buffer
+	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintf(tw, "Created\t%d\n", len(r.Created))
+	_, _ = fmt.Fprintf(tw, "Adopted\t%d\n", len(r.Adopted))
+	_, _ = fmt.Fprintf(tw, "Skipped (ambiguous)\t%d\n", len(r.Skipped))
+	_, _ = fmt.Fprintf(tw, "Failed\t%d\n", len(r.Failed))
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	_, err := w.Write(buf.Bytes())
+	return err
+}
