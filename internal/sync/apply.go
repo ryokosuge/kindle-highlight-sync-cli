@@ -37,7 +37,7 @@ type BookFailure struct {
 type ApplyResult struct {
 	Created []string      // CreateBook でページを作った Book
 	Adopted []string      // AdoptBook で既存ページを引き取った Book
-	Exact   []string      // ページがあり何も書かなかった Book
+	Exact   []string      // ページがあり UpdateBook で更新できた Book
 	Skipped []string      // 照合が ambiguous で skip した Book（§51）
 	Failed  []BookFailure // 書き込みが Book 単位で失敗した Book（§72）
 }
@@ -72,7 +72,7 @@ func (e *booksNotSyncedError) Error() string {
 	return b.String()
 }
 
-// ApplyBooks は Book ごとに照合し、none なら CreateBook、adoptable なら AdoptBook を呼び、exact なら何も書かず、ambiguous は skip する（§51）。
+// ApplyBooks は Book ごとに照合し、none なら CreateBook、adoptable なら AdoptBook、exact なら UpdateBook を呼び、ambiguous は skip する（§51）。
 // 1 冊の書き込みが 400 / 5xx / タイムアウトで失敗してもその Book を Failed に残して残りを続ける（§72）。
 // タイムアウトで作成の結果が分からない Book は再送しない（§29。次の sync の照合で作成済みなら exact になる）。
 // 書き込みが 401 / 403 / 404 で失敗したとき（§73）と FindBook が失敗したときは、その時点で残りを書かずに exitcode.Notion の error を返す。
