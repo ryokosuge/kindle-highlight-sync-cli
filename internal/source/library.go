@@ -29,6 +29,7 @@ var (
 	errAnnotatedDateWeekday  = errors.New("last annotated date has a weekday that does not match the date")
 
 	annotatedDatePattern = regexp.MustCompile(`^([0-9]{4})年([1-9]|1[0-2])月([1-9]|[12][0-9]|3[01])日([日月火水木金土])曜日$`)
+	authorPrefixPattern  = regexp.MustCompile(`^著者[:：]`)
 	weekdayNames         = [...]string{"日", "月", "火", "水", "木", "金", "土"}
 )
 
@@ -89,6 +90,8 @@ func parseLibraryBook(s *goquery.Selection) (domain.Book, error) {
 	asin := strings.TrimSpace(s.AttrOr("id", ""))
 	title := strings.TrimSpace(s.Find(librarySelectorTitle).First().Text())
 	author := strings.TrimSpace(s.Find(librarySelectorAuthor).First().Text())
+	// 実機の Book 一覧では著者要素が「著者: <名前>」の表示文字列で返るため、接頭辞を除く（§18.4）。
+	author = strings.TrimSpace(authorPrefixPattern.ReplaceAllString(author, ""))
 	book := domain.Book{
 		ID:     domain.NewBookID(asin, title, author),
 		ASIN:   asin,
