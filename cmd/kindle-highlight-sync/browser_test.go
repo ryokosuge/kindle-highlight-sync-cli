@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ type fakeBrowser struct {
 	listDeadline time.Time
 	highlights   map[string][]domain.Highlight // Book.ID ごとに ListHighlights が返す
 	highlightErr map[string]error              // Book.ID ごとに ListHighlights が返す
+	laterHLErr   map[string]error              // Book.ID ごとに、2 回目以降の ListHighlights が返す（予定の算出では取れ、実行で失敗する Book）
 	hlBooks      []domain.Book                 // ListHighlights に渡った Book の順
 	hlDeadlines  []time.Time                   // ListHighlights に渡った ctx の期限（無ければゼロ値）
 	calls        []string                      // 呼ばれたメソッドの順
@@ -62,6 +64,9 @@ func (f *fakeBrowser) ListHighlights(ctx context.Context, book domain.Book) ([]d
 	f.hlBooks = append(f.hlBooks, book)
 	d, _ := ctx.Deadline()
 	f.hlDeadlines = append(f.hlDeadlines, d)
+	if err := f.laterHLErr[book.ID]; err != nil && slices.ContainsFunc(f.hlBooks[:len(f.hlBooks)-1], func(b domain.Book) bool { return b.ID == book.ID }) {
+		return f.highlights[book.ID], err
+	}
 	return f.highlights[book.ID], f.highlightErr[book.ID]
 }
 
