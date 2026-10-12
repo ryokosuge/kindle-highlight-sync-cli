@@ -70,7 +70,7 @@ func (e *booksFailedError) Error() string {
 	return b.String()
 }
 
-// syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得する。
+// syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得して追記する。
 // a.dryRun なら Highlight の取得は照合（BuildPlan）の中で 1 回だけ行い、予定の表を a.out に出して Notion と State は書かない（§63）。
 // initial_sync_completed_at が無ければ Initial Sync として、予定を組んで Create / Adopt の件数の確認を取ってから取得に進み（§47）、
 // 確認の後ろで none の Book を作成し adoptable の Book を Adopt して、件数を出す（§51）。skip・書き込みの失敗は exit 8（§72）。取得を終えた run を記録する（§48）。
@@ -126,8 +126,8 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 		return err // state.db を読めない失敗は exitcode.LocalState（6）で包まれている
 	}
 	if !synced {
-		// Initial Sync（§47）。予定の算出（BuildPlan）は Book 単位の失敗を許さないので、下の取得ループには流用せず Highlight を 2 回取る。
-		// 予定から除いた ASIN の無い Book は下のループでも同じ失敗に数えるので、ここでは捨てる
+		// Initial Sync（§47）。予定の算出（BuildPlan）は Book 単位の失敗を許さないので、実行の取得には流用せず Highlight を予定と実行で 1 回ずつ取る。
+		// 予定から除いた ASIN の無い Book は実行でも同じ失敗に数えるので、ここでは捨てる
 		plan, _, err := buildSyncPlan(ctx, a, books, b)
 		if err != nil {
 			return err
@@ -136,30 +136,14 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 			return err
 		}
 	}
-	// 確認（Initial Sync なら）を通ったあと、Initial Sync かどうかにかかわらず none の Book は作成し、adoptable の Book は Adopt する（§51）。
-	// ambiguous の skip と書き込みの失敗は、下の Book 単位の失敗の後ろで exit 8 にする
-	applied, err := applyBooks(ctx, a, books)
+	// 確認（Initial Sync なら）を通ったあと、Initial Sync かどうかにかかわらず none の Book は作成し、adoptable の Book は Adopt し、
+	// ページが決まった Book には既知を除いた Highlight を追記する（§51 / §24）。
+	// 1 冊だけの構造の異常と ASIN の無い Book は Book ID と種類を集めて残りの Book を続け、取り終えて 1 冊でもあれば SourceFormat（exit 7）で終わる（§72）。
+	// 全 Book に共通の枠の異常（source.ErrHighlightsFrame。§73）とそれ以外の失敗（取得の失敗・ctx の取消）は、その時点で種類を変えずに返す。
+	// ambiguous の skip と書き込み・追記の失敗は、exit 7 の後ろで exit 8 にする
+	applied, failed, err := applyBooks(ctx, a, books, b)
 	if err != nil {
 		return err
-	}
-	// 取得した Highlight はまだ使わない。1 冊だけの構造の異常と ASIN の無い Book は Book ID と種類を集めて残りの Book を続け、
-	// 取り終えて 1 冊でもあれば SourceFormat（exit 7）で終わる（§72。exit 8 への切り替えと last_synced_at の扱いは Epic #7）。
-	// 全 Book に共通の枠の異常（source.ErrHighlightsFrame。§73）とそれ以外の失敗（取得の失敗・ctx の取消）は、その時点で種類を変えずに返す
-	var failed []bookFailure
-	for _, book := range books {
-		if book.ASIN == "" {
-			// Highlight のページは ASIN でしか開けない。黙って飛ばすと取りこぼしに気づけないので失敗に数える
-			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
-			continue
-		}
-		_, err := b.ListHighlights(ctx, book)
-		switch {
-		case err == nil:
-		case errors.Is(err, source.ErrSourceFormat) && !errors.Is(err, source.ErrHighlightsFrame):
-			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureSourceFormat})
-		default:
-			return err
-		}
 	}
 	// 確認を通過して取得を終えた run は、success でも Book 単位の失敗（partial、§72）でも閉じたあとに記録する（上の defer）。
 	// 全 Book に共通の失敗はここに届かず記録しない
@@ -171,33 +155,49 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	return applied.PartialFailure()
 }
 
-// applyBooks は ASIN の無い Book を除いて Book ごとに作成・Adopt を実行し、件数を a.out に出す。
-// 同期先の組み立て（exit 3）と照合・書き込みの fatal な失敗（exit 4）は種類を変えずに返す。
-// skip・Book 単位の失敗は結果に残し、呼び出し側が PartialFailure で exit 8 にする。
-func applyBooks(ctx context.Context, a *app, books []domain.Book) (syncengine.ApplyResult, error) {
+// applyBooks は ASIN の無い Book を失敗に数えて除き、残りの Book ごとに作成・Adopt・追記を実行し、件数を a.out に出す。
+// Highlight は ApplyBooks が Book ごとに取る。1 冊だけの構造の異常は失敗として返す一覧に集め、その Book の追記は行わない。
+// 同期先の組み立て（exit 3）と照合・書き込みの fatal な失敗（exit 4）、全 Book に共通の取得の失敗は種類を変えずに返す。
+// skip・Book 単位の書き込みの失敗は結果に残し、呼び出し側が PartialFailure で exit 8 にする。
+func applyBooks(ctx context.Context, a *app, books []domain.Book, src browser) (syncengine.ApplyResult, []bookFailure, error) {
 	dst, err := newDestination(a)
 	if err != nil {
-		return syncengine.ApplyResult{}, err
+		return syncengine.ApplyResult{}, nil, err
 	}
+	var failed []bookFailure
 	targets := make([]domain.Book, 0, len(books))
 	for _, book := range books {
-		if book.ASIN != "" {
-			targets = append(targets, book)
+		if book.ASIN == "" {
+			// Highlight のページは ASIN でしか開けない。黙って飛ばすと取りこぼしに気づけないので失敗に数える
+			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
+			continue
 		}
+		targets = append(targets, book)
 	}
-	result, err := syncengine.ApplyBooks(ctx, targets, noHighlights{}, dst)
+	lister := &formatFailureLister{src: src}
+	result, err := syncengine.ApplyBooks(ctx, targets, lister, dst)
+	failed = append(failed, lister.failed...)
 	// fatal な失敗で止まっても、そこまでに書いた分は Notion に残るので件数を出してから error を返す
 	if werr := writeApplyResult(a.out, result); err == nil {
 		err = werr
 	}
-	return result, err
+	return result, failed, err
 }
 
-// noHighlights は Highlight を返さない Source。通常の sync への追記の配線までの間、ApplyBooks に渡して作成・Adopt だけを行わせる。
-type noHighlights struct{}
+// formatFailureLister は ListHighlights の 1 冊だけの構造の異常を failed に記録して Highlight 0 件として返す。
+// それ以外の失敗（全 Book に共通の枠の異常・ブラウザの失敗・ctx の取消）はそのまま返し、ApplyBooks が種類を保って止める。
+type formatFailureLister struct {
+	src    browser
+	failed []bookFailure
+}
 
-func (noHighlights) ListHighlights(context.Context, domain.Book) ([]domain.Highlight, error) {
-	return nil, nil
+func (l *formatFailureLister) ListHighlights(ctx context.Context, book domain.Book) ([]domain.Highlight, error) {
+	hs, err := l.src.ListHighlights(ctx, book)
+	if errors.Is(err, source.ErrSourceFormat) && !errors.Is(err, source.ErrHighlightsFrame) {
+		l.failed = append(l.failed, bookFailure{BookID: book.ID, Kind: bookFailureSourceFormat})
+		return nil, nil
+	}
+	return hs, err
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。

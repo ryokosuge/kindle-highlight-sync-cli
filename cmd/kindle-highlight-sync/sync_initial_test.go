@@ -23,6 +23,7 @@ import (
 // Initial Sync の end-to-end の fixture。dryRunBooks に Adopt の候補を 1 冊足し、Create 1 冊（dryRunBookNew）・Adopt 1 冊になる。
 const (
 	testInitialAdoptBlocksPath = "/v1/blocks/page-adopt/children"
+	testCreatedBlocksPath      = "/v1/blocks/page-created/children"
 	testPagesPath              = "/v1/pages"
 	wantInitialPrompt          = "1 books will be created.\n1 existing pages will be adopted.\n\nContinue? [y/N] "
 	wantInitialDeclinedErr     = "configuration / confirmation required: initial sync was not confirmed\n"
@@ -39,7 +40,17 @@ var (
 	// 照合の読み取りだけの要求。ページ・Property・block を変える要求（POST /v1/pages 等）は無い
 	initialReadRequests = []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath, "GET " + testInitialAdoptBlocksPath}
 	// 確認を通ったあとの実行の要求。同期先を組み直して全件を取り直し、exact の Book を更新し、none の Book を作成し、adoptable の Book を Adopt する
-	initialApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
+	// Highlight を持つ Book（exact と none）のページには、既知を除いて追記する。exact は既知を読んでから追記し、作成したページは既知を読まずに追記する
+	initialApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath, "PATCH " + testDryRunBlocksPath,
+		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt"}
+	// 続く sync の実行の要求。exact のページには追記済みなので追記は無く、同じ Data Source を返す Notion では none の Book をまた作成して追記する
+	initialSecondApplyRequests = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
+		"POST " + testPagesPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testPagesPath + "/page-adopt"}
+	initialSecondApplyRequestsNewBookFailed = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
+		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
+	// none の Book の Highlight の取得が失敗したときの実行の要求。作成までで追記は無い
+	initialApplyRequestsNewBookFailed = []string{"POST " + testDryRunQueryPath, "PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath, "PATCH " + testDryRunBlocksPath,
+		"POST " + testPagesPath, "PATCH " + testPagesPath + "/page-adopt"}
 	// 確認を通った run が Notion に届ける要求の全体
 	initialAppliedRequests = slices.Concat(initialReadRequests, initialApplyRequests)
 	// 1 冊だけの構造の異常（Book 単位の失敗）と、全 Book に共通の枠の異常（fatal）。形は sync_test.go の bookErr / frameErr と同じ
@@ -285,12 +296,12 @@ func TestSyncInitial(t *testing.T) {
 				wantStderr: "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
 			},
 			{
-				// 予定の算出は ambiguous の Book の Highlight を取らないので、その Book だけの構造の異常は取得のループで初めて出る
+				// 予定の算出では取れた Book の Highlight のページが、実行では構造の異常になる
 				name:         "1 冊の Highlight のページだけが構造の異常で exit 7 で終わる（partial）",
-				books:        initialBooksWithAmbiguous,
-				highlightErr: map[string]error{dryRunBookAmbiguous.ID: errSourceFormatBook},
+				books:        initialBooks,
+				highlightErr: map[string]error{dryRunBookNew.ID: errSourceFormatBook},
 				wantCode:     7,
-				wantStderr:   "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookAmbiguous.ID + " (unexpected notebook structure)\n",
+				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
 			},
 		}
 		for _, tt := range tests {
@@ -300,7 +311,7 @@ func TestSyncInitial(t *testing.T) {
 				stubSyncPrompter(t, "y\n", true)
 				b := newInitialBrowser()
 				b.books = tt.books
-				b.highlightErr = tt.highlightErr
+				b.laterHLErr = tt.highlightErr
 				stubBrowser(t, b, nil)
 
 				// 記録は閉じた後に行うので、Close の時点ではまだ記録されていない
@@ -320,9 +331,13 @@ func TestSyncInitial(t *testing.T) {
 				if !initialSyncRecorded(t, p) {
 					t.Fatal("initial_sync_completed_at not recorded")
 				}
-				assertRequests(t, requests(), initialAppliedRequests...)
+				firstApply, secondApply := initialApplyRequests, initialSecondApplyRequests
+				if tt.highlightErr != nil {
+					firstApply, secondApply = initialApplyRequestsNewBookFailed, initialSecondApplyRequestsNewBookFailed
+				}
+				assertRequests(t, requests(), slices.Concat(initialReadRequests, firstApply)...)
 
-				// 2 回目は Initial Sync ではないので、Notion に要求せず問いも出さず、Highlight は取得のループで 1 回だけ取る
+				// 2 回目は Initial Sync ではないので、予定の算出も問いも出さず、Highlight は実行で 1 回だけ取る
 				b2 := newInitialBrowser()
 				b2.books = tt.books
 				b2.highlightErr = tt.highlightErr
@@ -337,7 +352,7 @@ func TestSyncInitial(t *testing.T) {
 				if !slices.Equal(b2.hlBooks, withASIN(tt.books)) {
 					t.Errorf("2nd ListHighlights() books = %+v, want %+v", b2.hlBooks, withASIN(tt.books))
 				}
-				assertRequests(t, requests(), slices.Concat(initialAppliedRequests, initialApplyRequests)...)
+				assertRequests(t, requests(), slices.Concat(initialReadRequests, firstApply, secondApply)...)
 			})
 		}
 	})
@@ -388,12 +403,12 @@ func TestSyncInitial(t *testing.T) {
 				name:         "確認のあとの全 Book に共通の失敗では exit 7 でも記録しない",
 				configTOML:   validConfigTOML,
 				token:        testDryRunToken,
-				highlightErr: map[string]error{dryRunBookAmbiguous.ID: errHighlightsFrame},
+				highlightErr: map[string]error{dryRunBookNew.ID: errHighlightsFrame},
 				wantCode:     7,
 				wantStderr: func(config.Paths) string {
 					return "source format error: " + errHighlightsFrame.Error() + "\n"
 				},
-				wantRequests: initialAppliedRequests,
+				wantRequests: slices.Concat(initialReadRequests, initialApplyRequests[:5]), // 作成したあとの取得で止まる
 			},
 			{
 				// 取得を終えても Chrome を閉じるのに失敗した run は success ではないので記録せず、exit 5 はそのまま
@@ -412,13 +427,13 @@ func TestSyncInitial(t *testing.T) {
 				name:         "Book 単位の失敗のあとにブラウザを閉じるのに失敗すると exit 7 のまま記録しない",
 				configTOML:   validConfigTOML,
 				token:        testDryRunToken,
-				highlightErr: map[string]error{dryRunBookAmbiguous.ID: errSourceFormatBook},
+				highlightErr: map[string]error{dryRunBookNew.ID: errSourceFormatBook},
 				closeErr:     closeErr,
 				wantCode:     7,
 				wantStderr: func(config.Paths) string {
-					return "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookAmbiguous.ID + " (unexpected notebook structure)\n"
+					return "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n"
 				},
-				wantRequests: initialAppliedRequests,
+				wantRequests: slices.Concat(initialReadRequests, initialApplyRequestsNewBookFailed),
 			},
 		}
 		for _, tt := range tests {
@@ -428,13 +443,10 @@ func TestSyncInitial(t *testing.T) {
 				t.Setenv(secrets.EnvNotionToken, tt.token)
 				stubSyncPrompter(t, "y\n", true)
 				b := newInitialBrowser()
-				if tt.highlightErr != nil {
-					b.books = initialBooksWithAmbiguous // 予定の算出が Highlight を取らない Book だけが、取得のループで初めて失敗する
-				}
 				if tt.pageHTML != nil {
 					b.pageHTML = tt.pageHTML
 				}
-				b.highlightErr = tt.highlightErr
+				b.laterHLErr = tt.highlightErr // 予定の算出では取れ、実行で失敗する
 				b.closeErr = tt.closeErr
 				stubBrowser(t, b, nil)
 
@@ -477,7 +489,7 @@ func TestSyncInitial(t *testing.T) {
 					t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
 				}
 				// 作成・Adopt する Book が無くても、実行は同期先を組み直して照合し、exact の Book を更新する
-				assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "PATCH "+testPagesPath+"/page-exact")
+				assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "PATCH "+testPagesPath+"/page-exact", "GET "+testDryRunBlocksPath, "PATCH "+testDryRunBlocksPath)
 				if !initialSyncRecorded(t, p) {
 					t.Error("initial_sync_completed_at not recorded")
 				}

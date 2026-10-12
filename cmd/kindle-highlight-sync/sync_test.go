@@ -145,7 +145,7 @@ func TestSync(t *testing.T) {
 
 				var stdout, stderr bytes.Buffer
 				code := run(tt.args, &stdout, &stderr)
-				if got, want := planCells(t, stdout.String()), applyCells("0", "0", "0", "0"); !reflect.DeepEqual(got, want) {
+				if got, want := planCells(t, stdout.String()), applyCells("0", "0", "0", "0", "0"); !reflect.DeepEqual(got, want) {
 					t.Errorf("run(%v) stdout cells = %q, want %q", tt.args, got, want)
 				}
 				assertSyncSucceeded(t, code, stderr.String(), filepath.Join(p.DataDir, "run.lock"))

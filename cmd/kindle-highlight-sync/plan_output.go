@@ -47,6 +47,7 @@ func writeApplyResult(w io.Writer, r syncengine.ApplyResult) error {
 	tw := tabwriter.NewWriter(&buf, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "Created\t%d\n", len(r.Created))
 	_, _ = fmt.Fprintf(tw, "Adopted\t%d\n", len(r.Adopted))
+	_, _ = fmt.Fprintf(tw, "Appended highlights\t%d\n", r.Appended)
 	_, _ = fmt.Fprintf(tw, "Skipped (ambiguous)\t%d\n", len(r.Skipped))
 	_, _ = fmt.Fprintf(tw, "Failed\t%d\n", len(r.Failed))
 	if err := tw.Flush(); err != nil {

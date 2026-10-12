@@ -2,8 +2,10 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -92,17 +94,68 @@ func newDryRunBrowser() *fakeBrowser {
 
 // setupDryRunNotion は token を環境変数に置き、newNotionClient を path ごとに replies の body を返す Notion の代役に向ける。
 // replies に無い path には空の JSON を返し、Client が invalid response で止まる。
+// PATCH /v1/blocks/{id}/children は追記した Quote Block を覚えて作った block を返し、続く GET の応答の末尾に足す。
 func setupDryRunNotion(t *testing.T, replies map[string]string) (requests func() []recordedRequest, clientCalls func() int) {
 	t.Helper()
 	keyring.MockInit()
 	t.Setenv(secrets.EnvNotionToken, testDryRunToken)
-	srv, requests := newNotionServerFunc(t, func(path string) string {
-		if body, ok := replies[path]; ok {
-			return body
-		}
-		return "{}"
-	})
+	srv, requests := newNotionServerHandler(t, dryRunNotionReply(t, replies))
 	return requests, stubNewNotionClient(t, srv)
+}
+
+// dryRunNotionReply は setupDryRunNotion の応答を返す関数。追記した block は呼び出しをまたいで覚えるので、1 つの Notion の代役につき 1 度だけ作る。
+func dryRunNotionReply(t *testing.T, replies map[string]string) func(method, path string, body []byte) string {
+	t.Helper()
+	appended := map[string][]string{} // path ごとの追記した block の JSON
+	return func(method, path string, body []byte) string {
+		if method == http.MethodPatch && strings.HasSuffix(path, "/children") {
+			var req struct {
+				Children []struct {
+					Quote struct {
+						RichText []struct {
+							Text struct {
+								Content string `json:"content"`
+							} `json:"text"`
+						} `json:"rich_text"`
+					} `json:"quote"`
+				} `json:"children"`
+			}
+			if err := json.Unmarshal(body, &req); err != nil {
+				t.Errorf("decode append request: %v", err)
+			}
+			var blocks []string
+			for _, c := range req.Children {
+				var text strings.Builder
+				for _, rt := range c.Quote.RichText {
+					text.WriteString(rt.Text.Content)
+				}
+				blocks = append(blocks, dryRunBlockJSON(fmt.Sprintf("appended-%d", len(appended[path])+len(blocks)+1), text.String()))
+			}
+			appended[path] = append(appended[path], blocks...)
+			return blockListBody(blocks...)
+		}
+		reply, ok := replies[path]
+		if !ok && method == http.MethodGet && len(appended[path]) > 0 {
+			reply, ok = blockListBody(), true // 空だったページに追記した分だけを返す
+		}
+		if !ok {
+			return "{}"
+		}
+		if method == http.MethodGet && len(appended[path]) > 0 {
+			var list struct {
+				Results []json.RawMessage `json:"results"`
+			}
+			if err := json.Unmarshal([]byte(reply), &list); err != nil {
+				t.Errorf("decode blocks reply: %v", err)
+			}
+			blocks := make([]string, 0, len(list.Results)+len(appended[path]))
+			for _, r := range list.Results {
+				blocks = append(blocks, string(r))
+			}
+			return blockListBody(append(blocks, appended[path]...)...)
+		}
+		return reply
+	}
 }
 
 // runSyncDryRun は sync --dry-run を走らせる。dry-run は標準出力に予定を出すので runSync とは別に stdout も返す。
@@ -391,7 +444,7 @@ func TestSyncDryRun(t *testing.T) {
 		}
 	})
 
-	t.Run("--dry-run を付けない Initial Sync の sync は予定の表を出さず、Notion には照合の読み取りのあとに実行の要求を出し、Highlight を予定と取得で 2 回取る", func(t *testing.T) {
+	t.Run("--dry-run を付けない Initial Sync の sync は予定の表を出さず、Notion には照合の読み取りのあとに実行の要求を出し、Highlight を予定と実行で 1 回ずつ取り、追記する", func(t *testing.T) {
 		setupXDG(t, validConfigTOML)
 		replies := dryRunReplies()
 		replies[testPagesPath] = `{"object":"page","id":"page-created"}`
@@ -404,8 +457,8 @@ func TestSyncDryRun(t *testing.T) {
 		if want := "partial failure: sync: 1 books were not synced: " + dryRunBookAmbiguous.ID + " (ambiguous)\n"; code != 8 || stderr != want {
 			t.Errorf("run(sync --yes) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
-		// 予定の算出は ambiguous を除いた Book の Highlight を取り、従来の取得は全 Book を取る
-		want := []domain.Book{dryRunBookExact, dryRunBookNew, dryRunBookExact, dryRunBookNew, dryRunBookAmbiguous}
+		// 予定の算出も実行も ambiguous の Book の Highlight は取らず、Book ごとに 1 回ずつ取る
+		want := []domain.Book{dryRunBookExact, dryRunBookNew, dryRunBookExact, dryRunBookNew}
 		if !slices.Equal(b.hlBooks, want) {
 			t.Errorf("ListHighlights() books = %+v, want %+v", b.hlBooks, want)
 		}
@@ -413,7 +466,7 @@ func TestSyncDryRun(t *testing.T) {
 		if got := clientCalls(); got != 2 {
 			t.Errorf("newNotionClient calls = %d, want 2", got)
 		}
-		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "PATCH "+testPagesPath+"/page-exact", "POST "+testPagesPath)
+		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "PATCH "+testPagesPath+"/page-exact", "GET "+testDryRunBlocksPath, "PATCH "+testDryRunBlocksPath, "POST "+testPagesPath, "PATCH "+testCreatedBlocksPath)
 	})
 
 	t.Run("本物の sync が排他を持っている間の dry-run は待たずに exit 9 で終わる", func(t *testing.T) {

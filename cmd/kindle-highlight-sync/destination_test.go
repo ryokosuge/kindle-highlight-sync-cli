@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -46,14 +47,22 @@ func newNotionServer(t *testing.T, body string) (*httptest.Server, func() []reco
 // newNotionServerFunc は受けた要求を記録し、path ごとに reply が返す body を返す Notion の代役と、記録を返す関数を作る。
 func newNotionServerFunc(t *testing.T, reply func(path string) string) (*httptest.Server, func() []recordedRequest) {
 	t.Helper()
+	return newNotionServerHandler(t, func(_, path string, _ []byte) string { return reply(path) })
+}
+
+// newNotionServerHandler は受けた要求を記録し、method・path・body から reply が返す body を返す Notion の代役と、記録を返す関数を作る。
+func newNotionServerHandler(t *testing.T, reply func(method, path string, body []byte) string) (*httptest.Server, func() []recordedRequest) {
+	t.Helper()
 	var mu sync.Mutex
 	var requests []recordedRequest
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.EscapedPath()
+		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
 		requests = append(requests, recordedRequest{method: r.Method, path: path, authorization: r.Header.Get("Authorization")})
+		out := reply(r.Method, path, body)
 		mu.Unlock()
-		_, _ = w.Write([]byte(reply(path)))
+		_, _ = w.Write([]byte(out))
 	}))
 	t.Cleanup(srv.Close)
 	return srv, func() []recordedRequest {
