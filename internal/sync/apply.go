@@ -186,9 +186,10 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 		appended, appendErr = dst.AppendHighlights(ctx, remote, unknown)
 		r.Appended += len(appended)
 	}
-	// 追記が途中で失敗しても、成功した分は次の sync で重複して書かないよう先に保存する
+	// 追記が途中で失敗しても、成功した分は次の sync で重複して書かないよう先に保存する。
+	// 中断・タイムアウトでの失敗でも保存できるよう、キャンセルだけ切り離した context で保存し、元の追記の error は fail で仕分ける
 	if saved := highlightStates(book.ID, append(backfill, appended...), now); len(saved) > 0 {
-		if err := st.SaveHighlights(ctx, saved); err != nil {
+		if err := st.SaveHighlights(context.WithoutCancel(ctx), saved); err != nil {
 			return localStateError("save highlights", book.ID, err)
 		}
 	}

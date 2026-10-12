@@ -28,6 +28,7 @@ type fakeState struct {
 	saveErr   error                                      // SaveHighlights が返す error（行は保存しない）
 	listCalls []string
 	saves     [][]state.HighlightState
+	saveCtxs  []error // SaveHighlights が受け取った context の Err()
 }
 
 func (f *fakeState) ListHighlightIDs(_ context.Context, bookID string) (map[string]state.HighlightState, error) {
@@ -42,8 +43,9 @@ func (f *fakeState) ListHighlightIDs(_ context.Context, bookID string) (map[stri
 	return got, nil
 }
 
-func (f *fakeState) SaveHighlights(_ context.Context, states []state.HighlightState) error {
+func (f *fakeState) SaveHighlights(ctx context.Context, states []state.HighlightState) error {
 	f.saves = append(f.saves, states)
+	f.saveCtxs = append(f.saveCtxs, ctx.Err())
 	if f.saveErr != nil {
 		return f.saveErr
 	}
@@ -640,6 +642,8 @@ func TestApplyBooksState(t *testing.T) {
 		appendedFirst map[string]int
 		listErrs      map[string]error
 		saveErr       error
+		canceled      bool // ApplyBooks にキャンセル済みの context を渡す
+		wantCanceled  bool // 返る error が context.Canceled であること
 		want          ApplyResult
 		wantAppends   map[string][]string
 		wantDstList   []string
@@ -697,6 +701,19 @@ func TestApplyBooksState(t *testing.T) {
 			wantCode:      4,
 		},
 		{
+			name:          "追記が部分成功してキャンセルされても、キャンセルされていない context で成功した分を保存し、元のキャンセルの error を返す",
+			books:         exactBook,
+			canceled:      true,
+			appendErrs:    map[string]error{"page-exact": notionCanceledError},
+			appendedFirst: map[string]int{"page-exact": 2},
+			want:          ApplyResult{Exact: []string{"book-exact"}, Appended: 2},
+			wantAppends:   map[string][]string{"page-exact": {"a-1", "a-2", "a-3"}},
+			wantDstList:   []string{"page-exact"},
+			wantSaves:     [][]state.HighlightState{{stateRow("book-exact", "a-1", "block-a-1"), stateRow("book-exact", "a-2", "block-a-2")}},
+			wantCanceled:  true,
+			wantCode:      4, // fail は Notion client が返した元の error をそのまま返す（LocalState の 6 ではない）
+		},
+		{
 			name:     "State の読み取りが失敗したら、残りの Book を書かずに exitcode.LocalState の error を返す",
 			books:    applyBooks[1:3],
 			listErrs: map[string]error{"book-adopt": errors.New("state: open state.db")},
@@ -727,9 +744,23 @@ func TestApplyBooksState(t *testing.T) {
 			}
 			st := &fakeState{rows: tt.rows, listErrs: tt.listErrs, saveErr: tt.saveErr}
 
-			got, err := ApplyBooks(context.Background(), tt.books, src, dst, st, applyNow)
+			ctx := context.Background()
+			if tt.canceled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			got, err := ApplyBooks(ctx, tt.books, src, dst, st, applyNow)
 			if code := exitcode.Code(err); code != tt.wantCode {
 				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", code, tt.wantCode, err)
+			}
+			if gotCanceled := errors.Is(err, context.Canceled); gotCanceled != tt.wantCanceled {
+				t.Errorf("errors.Is(err, context.Canceled) = %v, want %v (err = %v)", gotCanceled, tt.wantCanceled, err)
+			}
+			for i, ctxErr := range st.saveCtxs {
+				if ctxErr != nil {
+					t.Errorf("SaveHighlights の context.Err() [%d] = %v, want %v", i, ctxErr, nil)
+				}
 			}
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("ApplyBooks() = %+v, want %+v", got, tt.want)
