@@ -21,6 +21,8 @@ const (
 	BookFailureCreate BookFailureKind = "create failed"
 	// BookFailureAdopt は AdoptBook が失敗した Book。
 	BookFailureAdopt BookFailureKind = "adopt failed"
+	// BookFailureUpdate は UpdateBook が失敗した Book。
+	BookFailureUpdate BookFailureKind = "update failed"
 	// bookSkippedAmbiguous は照合が ambiguous で skip した Book の、partial failure の文言に出す種類（§51）。
 	bookSkippedAmbiguous = "ambiguous"
 )
@@ -86,6 +88,12 @@ func ApplyBooks(ctx context.Context, books []domain.Book, dst destination.Destin
 		}
 		switch m.Status {
 		case destination.BookMatchExact:
+			if err := dst.UpdateBook(ctx, *m.Book, b); err != nil {
+				if err := r.fail(b.ID, BookFailureUpdate, err); err != nil {
+					return r, err
+				}
+				continue
+			}
 			r.Exact = append(r.Exact, b.ID)
 		case destination.BookMatchAdoptable:
 			if err := dst.AdoptBook(ctx, *m.Book, b); err != nil {

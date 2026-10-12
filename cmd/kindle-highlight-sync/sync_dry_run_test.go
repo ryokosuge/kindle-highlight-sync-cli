@@ -73,8 +73,9 @@ func dryRunBlockJSON(id, text string) string {
 // dryRunReplies は path ごとの Notion の応答。exact のページの子 block には dryRunBookExact の 1 件目の Sync Marker がある。
 func dryRunReplies() map[string]string {
 	return map[string]string{
-		testDryRunQueryPath:  dryRunQueryBody(),
-		testDryRunBlocksPath: blockListBody(dryRunBlockJSON("block-1", "Distinctive Highlight Text\nkhs:"+dryRunHighlights[dryRunBookExact.ID][0].ID)),
+		testDryRunQueryPath:           dryRunQueryBody(),
+		testDryRunBlocksPath:          blockListBody(dryRunBlockJSON("block-1", "Distinctive Highlight Text\nkhs:"+dryRunHighlights[dryRunBookExact.ID][0].ID)),
+		testPagesPath + "/page-exact": `{"object":"page","id":"page-exact"}`,
 	}
 }
 
@@ -412,7 +413,7 @@ func TestSyncDryRun(t *testing.T) {
 		if got := clientCalls(); got != 2 {
 			t.Errorf("newNotionClient calls = %d, want 2", got)
 		}
-		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "POST "+testPagesPath)
+		assertRequests(t, requests(), "POST "+testDryRunQueryPath, "GET "+testDryRunBlocksPath, "POST "+testDryRunQueryPath, "PATCH "+testPagesPath+"/page-exact", "POST "+testPagesPath)
 	})
 
 	t.Run("本物の sync が排他を持っている間の dry-run は待たずに exit 9 で終わる", func(t *testing.T) {
