@@ -176,6 +176,11 @@ func TestNotionDestinationAppendHighlightsSplit(t *testing.T) {
 			wantSizes:  []int{3, 2},
 		},
 		{
+			name:       "本文だけでは 500KB に収まっても request の wrapper を含めて超えるなら分ける",
+			highlights: large(3, 163_500),
+			wantSizes:  []int{2, 1},
+		},
+		{
 			name:       "1 件だけで 500KB を超える Highlight は弾かずにその 1 件だけで送る",
 			highlights: append(large(1, 600_000), appendHighlights(1)...),
 			wantSizes:  []int{1, 1},

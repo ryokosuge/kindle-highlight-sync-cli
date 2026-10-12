@@ -18,6 +18,7 @@ type queryReply struct {
 type queryRequestRecord struct {
 	method, path, authorization, notionVersion, contentType string
 	body                                                    map[string]any
+	size                                                    int // 受けた body のバイト数
 }
 
 // newQueryTestClient は要求ごとに replies を順に返すサーバーにつないだ Client と、受けた要求の記録を返す。
@@ -36,6 +37,7 @@ func newQueryTestClient(t *testing.T, replies ...queryReply) (*Client, func() []
 			authorization: r.Header.Get("Authorization"),
 			notionVersion: r.Header.Get("Notion-Version"),
 			contentType:   r.Header.Get("Content-Type"),
+			size:          len(raw),
 		}
 		if err := json.Unmarshal(raw, &record.body); err != nil {
 			t.Errorf("request body %q is not JSON: %v", raw, err)

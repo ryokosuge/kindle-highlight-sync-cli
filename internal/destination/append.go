@@ -2,7 +2,6 @@ package destination
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/notion"
@@ -10,14 +9,14 @@ import (
 
 // Append block children の 1 回の要求の上限（https://developers.notion.com/reference/request-limits）。
 // children は 100 block まで、body は 500KB まで。client は 100 件超を送らずに error にするが大きさは見ないので、
-// どちらも AppendHighlights 側で収める。
+// body は notion.AppendBodySize で測り、どちらも AppendHighlights 側で収める。
 const (
 	maxAppendHighlights = 100
 	maxAppendBodyBytes  = 500 * 1000
 )
 
 // AppendHighlights は highlights を受け取った順（§25）に renderHighlight で Quote Block にし、remote のページの末尾に追記する。
-// 1 回の要求は maxAppendHighlights 件以下かつ見積もりの body が maxAppendBodyBytes 以下になる範囲で先頭から貪欲に区切り、
+// 1 回の要求は maxAppendHighlights 件以下かつbody が maxAppendBodyBytes 以下になる範囲で先頭から貪欲に区切り、
 // 順に送る。1 件だけで上限を超える Highlight はその 1 件で送り、Notion の 400 を失敗として返す。
 // 戻り値は追記できた Highlight の Quote Block の Block ID と Highlight ID の組で、highlights と同じ順。
 // 途中の要求が失敗したら残りの要求は送らず、それまでに成功した分と Notion の error（exitcode.Notion。
@@ -45,23 +44,9 @@ func (d *NotionDestination) AppendHighlights(ctx context.Context, remote RemoteB
 
 // appendBatchEnd は quotes[start:] のうち 1 回の要求で送る範囲の終端を返す。先頭の 1 件は上限を超えていても含める。
 func appendBatchEnd(quotes []notion.QuoteBlock, start int) int {
-	end, size := start, 0
-	for end < len(quotes) && end-start < maxAppendHighlights {
-		size += quoteBodySize(quotes[end])
-		if size > maxAppendBodyBytes && end > start {
-			break
-		}
+	end := start + 1
+	for end < len(quotes) && end-start < maxAppendHighlights && notion.AppendBodySize(quotes[start:end+1]) <= maxAppendBodyBytes {
 		end++
 	}
 	return end
-}
-
-// quoteBodySize は quote が body で占める大きさの見積もり（JSON にしたバイト数）。
-// client が送る形とは key が違うが、大きさの大半は本文なので区切りの判断にはこれで足りる。
-func quoteBodySize(quote notion.QuoteBlock) int {
-	body, err := json.Marshal(quote)
-	if err != nil {
-		return 0
-	}
-	return len(body)
 }
