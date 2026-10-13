@@ -155,9 +155,9 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	record = !synced
 	// 取得に失敗した Book と ASIN の無い Book（exit 7）、skip と書き込み・追記の失敗（exit 8）を分け、両方あれば exit 7 を返す
 	failed := noASIN
-	var written []syncengine.BookFailure
+	var written []syncengine.FailedBook
 	for _, f := range applied.Failed {
-		if f.Kind == syncengine.BookFailureFetch {
+		if f.Kind == syncengine.FailureNotebookStructure || f.Kind == syncengine.FailureHighlightID {
 			failed = append(failed, bookFailure{BookID: f.BookID, Kind: bookFailureSourceFormat})
 			continue
 		}

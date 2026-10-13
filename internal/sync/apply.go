@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/destination"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/notion"
-	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/state"
 )
 
@@ -24,39 +22,13 @@ type highlightStore interface {
 	MarkBookSynced(ctx context.Context, b state.BookState) error
 }
 
-// BookFailureKind は Book 1 冊の書き込みが失敗した種類。文言には Book ID とこの種類だけを出し、タイトル・token は入れない（§74）。
-type BookFailureKind string
-
-const (
-	// BookFailureCreate は CreateBook が失敗した Book。
-	BookFailureCreate BookFailureKind = "create failed"
-	// BookFailureAdopt は AdoptBook が失敗した Book。
-	BookFailureAdopt BookFailureKind = "adopt failed"
-	// BookFailureUpdate は UpdateBook が失敗した Book。
-	BookFailureUpdate BookFailureKind = "update failed"
-	// BookFailureListKnown は Notion の既知の Highlight の取得が失敗した Book。
-	BookFailureListKnown BookFailureKind = "list highlights failed"
-	// BookFailureFetch は Source からの Highlight の取得が失敗した Book。
-	BookFailureFetch BookFailureKind = "fetch highlights failed"
-	// BookFailureAppend は AppendHighlights が失敗した Book。一部だけ追記できていても失敗に数える。
-	BookFailureAppend BookFailureKind = "append failed"
-	// bookSkippedAmbiguous は照合が ambiguous で skip した Book の、partial failure の文言に出す種類（§51）。
-	bookSkippedAmbiguous = "ambiguous"
-)
-
-// BookFailure は書き込みに失敗した 1 冊の Book。
-type BookFailure struct {
-	BookID string
-	Kind   BookFailureKind
-}
-
 // ApplyResult は ApplyBooks の結果。各 slice は Book ID を入力の順に持ち、件数は len で取る。
 type ApplyResult struct {
-	Created []string      // CreateBook でページを作った Book
-	Adopted []string      // AdoptBook で既存ページを引き取った Book
-	Exact   []string      // ページがあり UpdateBook で更新できた Book。追記の失敗は Failed に独立して載る
-	Skipped []string      // 照合が ambiguous で skip した Book（§51）
-	Failed  []BookFailure // 書き込みが Book 単位で失敗した Book（§72）
+	Created []string     // CreateBook でページを作った Book
+	Adopted []string     // AdoptBook で既存ページを引き取った Book
+	Exact   []string     // ページがあり UpdateBook で更新できた Book。追記の失敗は Failed に独立して載る
+	Skipped []string     // 照合が ambiguous で skip した Book（§51）
+	Failed  []FailedBook // 書き込みが Book 単位で失敗した Book（§72）
 
 	Appended int // 追記できた Highlight の数。一部だけ成功した Book の成功分と、結果不明のあと確かめ直しで Notion に在ると分かった分も数える
 
@@ -105,28 +77,11 @@ func (r ApplyResult) PartialFailure() error {
 	if len(r.Skipped) == 0 && len(r.Failed) == 0 {
 		return nil
 	}
-	return exitcode.New(exitcode.PartialFailure, &booksNotSyncedError{skipped: r.Skipped, failed: r.Failed})
-}
-
-// booksNotSyncedError は同期先に反映できなかった Book を集めたもの。
-type booksNotSyncedError struct {
-	skipped []string
-	failed  []BookFailure
-}
-
-func (e *booksNotSyncedError) Error() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "sync: %d books were not synced:", len(e.skipped)+len(e.failed))
-	sep := " "
-	for _, id := range e.skipped {
-		fmt.Fprintf(&b, "%s%s (%s)", sep, id, bookSkippedAmbiguous)
-		sep = "; "
+	failed := make([]FailedBook, 0, len(r.Skipped)+len(r.Failed))
+	for _, id := range r.Skipped {
+		failed = append(failed, FailedBook{BookID: id, Kind: FailureAmbiguous})
 	}
-	for _, f := range e.failed {
-		fmt.Fprintf(&b, "%s%s (%s)", sep, f.BookID, f.Kind)
-		sep = "; "
-	}
-	return b.String()
+	return NewFailedBooksError(append(failed, r.Failed...))
 }
 
 // ApplyBooks は Book ごとに照合し、none なら CreateBook、adoptable なら AdoptBook、exact なら UpdateBook を呼び、ambiguous は skip する（§51）。
@@ -154,7 +109,7 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 		switch m.Status {
 		case destination.BookMatchExact:
 			if err := dst.UpdateBook(ctx, *m.Book, b); err != nil {
-				if err := r.fail(b.ID, BookFailureUpdate, err); err != nil {
+				if err := r.fail(b.ID, FailureNotionWrite, err); err != nil {
 					return r, err
 				}
 				continue
@@ -165,7 +120,7 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 			}
 		case destination.BookMatchAdoptable:
 			if err := dst.AdoptBook(ctx, *m.Book, b); err != nil {
-				if err := r.fail(b.ID, BookFailureAdopt, err); err != nil {
+				if err := r.fail(b.ID, FailureNotionWrite, err); err != nil {
 					return r, err
 				}
 				continue
@@ -177,7 +132,7 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 		case destination.BookMatchNone:
 			remote, err := dst.CreateBook(ctx, b)
 			if err != nil {
-				if err := r.fail(b.ID, BookFailureCreate, err); err != nil {
+				if err := r.fail(b.ID, FailureNotionWrite, err); err != nil {
 					return r, err
 				}
 				continue
@@ -215,7 +170,14 @@ func (r *ApplyResult) syncHighlights(ctx context.Context, book domain.Book, remo
 func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remote destination.RemoteBook, hasKnown bool, src highlightLister, dst destination.Destination, st highlightStore, now time.Time) (bool, error) {
 	hs, err := src.ListHighlights(ctx, book)
 	if err != nil {
-		return false, r.fail(book.ID, BookFailureFetch, err)
+		kind, ok := ClassifyFetchError(err)
+		if !ok {
+			if !errors.Is(err, context.DeadlineExceeded) {
+				return false, err
+			}
+			kind = FailureNotebookStructure
+		}
+		return false, r.fail(book.ID, kind, err)
 	}
 	if len(hs) == 0 {
 		return true, nil
@@ -233,15 +195,14 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 	var known map[string]destination.RemoteHighlight
 	if hasKnown {
 		if known, err = dst.ListHighlightIDs(ctx, remote); err != nil {
-			return false, r.fail(book.ID, BookFailureListKnown, err)
+			return false, r.fail(book.ID, FailureNotionWrite, err)
 		}
 	}
 	unknown, backfill := Dedup(candidates, known)
 	var appended []destination.RemoteHighlight
 	var appendErr error
-	failKind := BookFailureAppend
 	if len(unknown) > 0 {
-		appended, failKind, appendErr = r.appendWithRecheck(ctx, remote, unknown, dst)
+		appended, appendErr = r.appendWithRecheck(ctx, remote, unknown, dst)
 	}
 	// 追記が途中で失敗しても、成功した分は次の sync で重複して書かないよう先に保存する。
 	// 中断・タイムアウトでの失敗でも保存できるよう、キャンセルだけ切り離した context で保存し、元の追記の error は fail で仕分ける
@@ -251,16 +212,15 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 		}
 	}
 	if appendErr != nil {
-		return false, r.fail(book.ID, failKind, appendErr)
+		return false, r.fail(book.ID, FailureNotionWrite, appendErr)
 	}
 	return true, nil
 }
 
 // appendWithRecheck は unknown を AppendHighlights に渡し、結果が分からない失敗（notion.OutcomeUnknown）のときは待ってから Notion の Highlight を取り直し、
 // 送ったのに成功に数えていない Highlight のうち Notion に在るものは成功分に足し、無いものだけを元の順のまま送り直す。確かめ直しと再送は maxRecheck 回まで。
-// 戻り値は成功に数えてよい分（AppendHighlights が返した分と、確かめ直しで Notion に在った分）と、失敗したときの種類・error。
-// 確かめ直しの取得の失敗は BookFailureListKnown、待ちを超える Retry-After・待ちの中断・確かめ直しを尽くした未反映は BookFailureAppend になる。
-func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.RemoteBook, unknown []domain.Highlight, dst destination.Destination) ([]destination.RemoteHighlight, BookFailureKind, error) {
+// 戻り値は成功に数えてよい分（AppendHighlights が返した分と、確かめ直しで Notion に在った分）と、失敗したときの error。
+func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.RemoteBook, unknown []domain.Highlight, dst destination.Destination) ([]destination.RemoteHighlight, error) {
 	confirmed, err := dst.AppendHighlights(ctx, remote, unknown)
 	r.Appended += len(confirmed)
 	pending := unknownHighlights(unknown, remoteByHighlightID(confirmed))
@@ -271,7 +231,7 @@ func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.
 			break
 		}
 		if serr := recheckSleep(ctx, d); serr != nil {
-			return confirmed, BookFailureAppend, serr
+			return confirmed, serr
 		}
 		if !rechecked {
 			rechecked = true
@@ -279,7 +239,7 @@ func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.
 		}
 		known, lerr := dst.ListHighlightIDs(ctx, remote)
 		if lerr != nil {
-			return confirmed, BookFailureListKnown, lerr
+			return confirmed, lerr
 		}
 		for _, h := range pending {
 			if rh, ok := known[h.ID]; ok {
@@ -289,7 +249,7 @@ func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.
 		}
 		pending = unknownHighlights(pending, known)
 		if len(pending) == 0 {
-			return confirmed, BookFailureAppend, nil
+			return confirmed, nil
 		}
 		r.Resent += len(pending)
 		var resent []destination.RemoteHighlight
@@ -298,7 +258,7 @@ func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.
 		r.Appended += len(resent)
 		pending = unknownHighlights(pending, remoteByHighlightID(resent))
 	}
-	return confirmed, BookFailureAppend, err
+	return confirmed, err
 }
 
 func remoteByHighlightID(rs []destination.RemoteHighlight) map[string]destination.RemoteHighlight {
@@ -327,7 +287,7 @@ func localStateError(op, bookID string, err error) error {
 // ローカル状態の不整合（exitcode.LocalState）と、Highlight の取得の失敗のうちタイムアウトでも 1 冊だけの構造の異常でもないもの（ブラウザの失敗・ErrHighlightsFrame など）も、
 // 種類を変えない元の error をそのまま返して止める。
 // タイムアウト（context.DeadlineExceeded）はキャンセルに含めず、Book 単位の失敗として続ける（§72）。
-func (r *ApplyResult) fail(bookID string, kind BookFailureKind, err error) error {
+func (r *ApplyResult) fail(bookID string, kind FailureKind, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
 	}
@@ -339,16 +299,8 @@ func (r *ApplyResult) fail(bookID string, kind BookFailureKind, err error) error
 		return err
 	}
 	// Highlight の取得の失敗は、タイムアウトでも 1 冊だけの構造の異常でもなければ全 Book に共通（ブラウザ・枠の異常など）なので種類を保って止める
-	if kind == BookFailureFetch && !errors.Is(err, context.DeadlineExceeded) && !isBookFormatError(err) {
-		return err
-	}
-	r.Failed = append(r.Failed, BookFailure{BookID: bookID, Kind: kind})
+	r.Failed = append(r.Failed, FailedBook{BookID: bookID, Kind: kind})
 	return nil
-}
-
-// isBookFormatError は 1 冊だけの構造の異常（ErrSourceFormat のうち、全 Book に共通の枠の異常 ErrHighlightsFrame を除くもの）。
-func isBookFormatError(err error) bool {
-	return errors.Is(err, source.ErrSourceFormat) && !errors.Is(err, source.ErrHighlightsFrame)
 }
 
 // isFatalWrite は Notion の認証の失敗（401 / 403）と Data Source・ページに届かない失敗（404）を fatal とみなす（§73）。

@@ -203,7 +203,7 @@ func TestSyncApply(t *testing.T) {
 		stubBrowser(t, newInitialBrowser(), nil)
 
 		code, stdout, stderr := runSyncApply(t)
-		if want := "partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (append failed)\n"; code != 8 || stderr != want {
+		if want := "partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (notion write failed)\n"; code != 8 || stderr != want {
 			t.Errorf("run(sync) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
 		// exact の 1 件は追記できている
