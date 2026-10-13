@@ -230,7 +230,7 @@ func TestPageWriteHTTPTimeout(t *testing.T) {
 		case <-r.Context().Done():
 		case <-time.After(time.Second):
 		}
-	}, withHTTPTimeout(50*time.Millisecond))
+	}, WithHTTPTimeout(50*time.Millisecond))
 	err := client.UpdatePage(context.Background(), "page-1", map[string]PropertyInput{"title": TitleInput("本")})
 	assertNotionError(t, err, "Client.Timeout exceeded")
 	if got := requests.Load(); got != 1 {

@@ -90,8 +90,6 @@ func WithHTTPTimeout(d time.Duration) Option {
 	}
 }
 
-func withHTTPTimeout(d time.Duration) Option { return WithHTTPTimeout(d) }
-
 func withRetryJitter(f func() time.Duration) Option {
 	return func(c *Client) {
 		c.retry.jitter = f
