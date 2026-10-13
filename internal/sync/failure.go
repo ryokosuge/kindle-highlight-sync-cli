@@ -59,7 +59,7 @@ func NewFailedBooksError(failed []FailedBook) error {
 }
 
 // ClassifyFetchError は Highlight の取得の error を Book 単位の失敗に当てはめる。
-// 当てはまれば種類と true を返し、当てはまらない（全 Book に共通の枠の異常・ctx の取消・ブラウザ由来など、run を止める側の）error は false を返す。
+// 当てはまれば種類と true を返し、当てはまらない（全 Book に共通の枠の異常・ctx の取消と期限切れ（context.DeadlineExceeded。run 全体の期限から来るので残りの Book も同じ失敗になる）・ブラウザ由来など、run を止める側の）error は false を返す。
 // Highlight ID が作れない error は ErrSourceFormat も併記しているので、先に見る。
 func ClassifyFetchError(err error) (FailureKind, bool) {
 	switch {

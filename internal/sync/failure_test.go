@@ -47,6 +47,7 @@ func TestClassifyFetchError(t *testing.T) {
 		{"行 id が無い error は ErrSourceFormat も持つが Highlight ID", idErr, FailureHighlightID, true},
 		{"枠の異常は run を止める", frame, 0, false},
 		{"ctx の取消は run を止める", fmt.Errorf("fetch: %w", context.Canceled), 0, false},
+		{"ctx の期限切れは run を止める", fmt.Errorf("fetch: %w", context.DeadlineExceeded), 0, false},
 		{"種類の無い error は run を止める", errors.New("browser closed"), 0, false},
 		{"ブラウザ由来の exit 5 は run を止める", exitcode.New(exitcode.Browser, errors.New("chrome")), 0, false},
 	}
