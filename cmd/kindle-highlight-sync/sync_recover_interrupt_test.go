@@ -20,116 +20,150 @@ var (
 	// recoverInterrupted は追記の後・保存の前に止まった Highlight（Notion に Sync Marker があり State に無い）、recoverNew はどちらにも無い Highlight。
 	recoverInterrupted = domain.Highlight{ID: "a-INTERRUPTED-3", BookID: dryRunBookExact.ID, Text: "Distinctive Interrupted Highlight"}
 	recoverNew         = domain.Highlight{ID: "a-NEW-4", BookID: dryRunBookExact.ID, Text: "Distinctive New Highlight"}
-	// recoverAnnotatedAt は 1 回目の last_synced_at より後なので、2 回目も Book が対象になる。
+	// recoverAnnotatedAt は 1 回目の last_synced_at より後なので、2 回目以降も Book が対象になる。
 	recoverAnnotatedAt = time.Now().AddDate(1, 0, 0).UTC().Truncate(24 * time.Hour)
 )
 
-// recoverMarkerCount は Notion のページにある khs:<id> の数。初めからある block の応答と、追記の要求の body を数える。
-func recoverMarkerCount(id, blocksReply string, appendBodies []string) int {
-	return strings.Count(blocksReply+strings.Join(appendBodies, ""), "khs:"+id)
+// recoverAllHighlights は 2 回目以降の Kindle の Highlight（1 回目は先頭の 2 つ）。
+func recoverAllHighlights() []domain.Highlight {
+	return append(slices.Clone(dryRunHighlights[dryRunBookExact.ID]), recoverInterrupted, recoverNew)
+}
+
+// recoverBrowser は Last Annotated Date を持つ exact の Book だけを返す fake。
+func recoverBrowser(highlights []domain.Highlight) *fakeBrowser {
+	book := dryRunBookExact
+	book.LastAnnotatedAt = &recoverAnnotatedAt
+	b := newDryRunBrowser()
+	b.books = []domain.Book{book}
+	b.highlights = map[string][]domain.Highlight{book.ID: highlights}
+	return b
 }
 
 func TestSyncRecoverInterrupt(t *testing.T) {
-	p := setupSyncedXDG(t, validConfigTOML)
-	replies := dryRunReplies()
+	// recoverRun は 1 回の sync の実行と、その結果の期待値。
+	type recoverRun struct {
+		interrupt       bool       // true なら実行前に、止まっていた Highlight の Quote Block を Notion の children に置き、Kindle の Highlight を増やす
+		wantCells       [][]string // 標準出力の件数
+		wantAppends     []string   // 追記の要求
+		wantAppendedIDs []string   // 追記の body に Sync Marker がある Highlight ID
+	}
+	firstRun := recoverRun{wantCells: withTargetCount(applyCells("0", "0", "1", "0", "0"), "1", "1"), wantAppends: []string{"PATCH " + testDryRunBlocksPath}, wantAppendedIDs: []string{"a-NOTE-2"}}
+	// 止まっていた Highlight は追記せず、新しい Highlight だけを追記する
+	recoverSecondRun := recoverRun{interrupt: true, wantCells: withTargetCount(applyCells("0", "0", "1", "0", "0"), "1", "1"), wantAppends: []string{"PATCH " + testDryRunBlocksPath}, wantAppendedIDs: []string{recoverNew.ID}}
+	noAppendRun := recoverRun{wantCells: withTargetCount(applyCells("0", "0", "0", "0", "0"), "1", "1")}
 
-	// 追記の要求の body を記録する Notion の代役
-	keyring.MockInit()
-	t.Setenv(secrets.EnvNotionToken, testDryRunToken)
-	reply := dryRunNotionReply(t, replies)
-	var appendBodies []string
-	srv, requests := newNotionServerHandler(t, func(method, path string, body []byte) string {
-		if method == http.MethodPatch && path == testDryRunBlocksPath {
-			appendBodies = append(appendBodies, string(body))
-		}
-		return reply(method, path, body)
-	})
-	stubNewNotionClient(t, srv)
+	tests := []struct {
+		name string
+		runs []recoverRun
+		// 全 run のあとの highlights（Highlight ID → Block ID）。nil なら見ない
+		wantSaved map[string]string
+		// true なら全 run のあと、どの Highlight ID の Sync Marker もページに 1 つだけである
+		wantSingleMarkers bool
+	}{
+		{
+			name: "Notion に Sync Marker がある Highlight は追記せず、どちらにも無い Highlight だけを追記する",
+			runs: []recoverRun{firstRun, recoverSecondRun},
+		},
+		{
+			name: "止まっていた Highlight も新しい Highlight も Block ID 付きで state.db の highlights に残る",
+			runs: []recoverRun{firstRun, recoverSecondRun},
+			wantSaved: map[string]string{
+				"a-HIGHLIGHT-1":       "block-1",
+				"a-NOTE-2":            "appended-1",
+				recoverInterrupted.ID: "block-interrupted",
+				recoverNew.ID:         "appended-2",
+			},
+		},
+		{
+			name:              "続けて sync すると追記の要求は 0 回で、どの Highlight ID の Sync Marker もページに 1 つだけである",
+			runs:              []recoverRun{firstRun, recoverSecondRun, noAppendRun},
+			wantSingleMarkers: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := setupSyncedXDG(t, validConfigTOML)
+			replies := dryRunReplies()
+			// 追記の要求の body を記録する Notion の代役
+			keyring.MockInit()
+			t.Setenv(secrets.EnvNotionToken, testDryRunToken)
+			reply := dryRunNotionReply(t, replies)
+			var appendBodies []string
+			srv, requests := newNotionServerHandler(t, func(method, path string, body []byte) string {
+				if method == http.MethodPatch && path == testDryRunBlocksPath {
+					appendBodies = append(appendBodies, string(body))
+				}
+				return reply(method, path, body)
+			})
+			stubNewNotionClient(t, srv)
 
-	newBrowser := func(highlights ...domain.Highlight) *fakeBrowser {
-		book := dryRunBookExact
-		book.LastAnnotatedAt = &recoverAnnotatedAt
-		b := newDryRunBrowser()
-		b.books = []domain.Book{book}
-		b.highlights = map[string][]domain.Highlight{book.ID: highlights}
-		return b
-	}
-	exactHighlights := dryRunHighlights[dryRunBookExact.ID]
+			exactHighlights := dryRunHighlights[dryRunBookExact.ID]
+			var initialBlocksReply string
+			for i, r := range tt.runs {
+				highlights := exactHighlights
+				if r.interrupt || i > 0 {
+					highlights = recoverAllHighlights()
+				}
+				if r.interrupt {
+					// 追記の後・保存の前に止まった状態: Notion には Sync Marker があり、State の highlights には無い
+					replies[testDryRunBlocksPath] = blockListBody(
+						dryRunBlockJSON("block-1", exactHighlights[0].Text+"\nkhs:"+exactHighlights[0].ID),
+						dryRunBlockJSON("block-interrupted", recoverInterrupted.Text+"\nkhs:"+recoverInterrupted.ID),
+					)
+					initialBlocksReply = replies[testDryRunBlocksPath]
+				}
+				b := recoverBrowser(highlights)
+				stubBrowser(t, b, nil)
+				before, bodiesBefore := len(requests()), len(appendBodies)
 
-	// 1 回目: 同期済みにする（a-HIGHLIGHT-1 は Notion の既知、a-NOTE-2 を追記する）
-	stubBrowser(t, newBrowser(exactHighlights...), nil)
-	if code, stdout, stderr := runSyncApply(t); code != 0 || stderr != "" {
-		t.Fatalf("run 1: run(sync) = %d, stdout = %q, stderr = %q, want 0 and empty stderr", code, stdout, stderr)
-	}
+				code, stdout, stderr := runSyncApply(t)
+				if code != 0 || stderr != "" {
+					t.Fatalf("run %d: run(sync) = %d, stderr = %q, want 0 and empty", i+1, code, stderr)
+				}
+				if got := highlightBookIDs(b); !slices.Equal(got, []string{dryRunBookExact.ID}) {
+					t.Errorf("run %d: highlight book IDs = %q, want %q", i+1, got, []string{dryRunBookExact.ID})
+				}
+				if got := planCells(t, stdout); !reflect.DeepEqual(got, r.wantCells) {
+					t.Errorf("run %d: stdout cells = %q, want %q", i+1, got, r.wantCells)
+				}
+				if got := appendRequests(requests()[before:]); !slices.Equal(got, r.wantAppends) {
+					t.Errorf("run %d: append requests = %q, want %q", i+1, got, r.wantAppends)
+				}
+				var appendedIDs []string
+				for _, body := range appendBodies[bodiesBefore:] {
+					for _, h := range recoverAllHighlights() {
+						if strings.Contains(body, "khs:"+h.ID) {
+							appendedIDs = append(appendedIDs, h.ID)
+						}
+					}
+				}
+				if !slices.Equal(appendedIDs, r.wantAppendedIDs) {
+					t.Errorf("run %d: appended Highlight IDs = %q, want %q", i+1, appendedIDs, r.wantAppendedIDs)
+				}
+			}
 
-	// 追記の後・保存の前に止まった状態: Notion には Sync Marker があり、State の highlights には無い
-	interruptedBlock := dryRunBlockJSON("block-interrupted", recoverInterrupted.Text+"\nkhs:"+recoverInterrupted.ID)
-	replies[testDryRunBlocksPath] = blockListBody(
-		dryRunBlockJSON("block-1", exactHighlights[0].Text+"\nkhs:"+exactHighlights[0].ID),
-		interruptedBlock,
-	)
-	initialBlocksReply := replies[testDryRunBlocksPath]
-	bodiesBeforeRun2 := len(appendBodies)
-
-	// 2 回目: Kindle に Highlight が 2 つ増える
-	b := newBrowser(append(slices.Clone(exactHighlights), recoverInterrupted, recoverNew)...)
-	stubBrowser(t, b, nil)
-	before := len(requests())
-	code, stdout, stderr := runSyncApply(t)
-	if code != 0 || stderr != "" {
-		t.Fatalf("run 2: run(sync) = %d, stderr = %q, want 0 and empty", code, stderr)
-	}
-	if got := highlightBookIDs(b); !slices.Equal(got, []string{dryRunBookExact.ID}) {
-		t.Errorf("run 2: highlight book IDs = %q, want %q", got, []string{dryRunBookExact.ID})
-	}
-	if got, want := planCells(t, stdout), withTargetCount(applyCells("0", "0", "1", "0", "0"), "1", "1"); !reflect.DeepEqual(got, want) {
-		t.Errorf("run 2: stdout cells = %q, want %q", got, want)
-	}
-	if got, want := appendRequests(requests()[before:]), []string{"PATCH " + testDryRunBlocksPath}; !slices.Equal(got, want) {
-		t.Errorf("run 2: append requests = %q, want %q", got, want)
-	}
-	if got := len(appendBodies) - bodiesBeforeRun2; got != 1 {
-		t.Fatalf("run 2: len(append bodies) = %d, want 1", got)
-	}
-	appended := appendBodies[bodiesBeforeRun2]
-	if strings.Contains(appended, "khs:"+recoverInterrupted.ID) {
-		t.Errorf("run 2: append body = %s, want no Sync Marker of %s", appended, recoverInterrupted.ID)
-	}
-	if !strings.Contains(appended, "khs:"+recoverNew.ID) {
-		t.Errorf("run 2: append body = %s, want Sync Marker of %s", appended, recoverNew.ID)
-	}
-
-	// 止まっていた Highlight も新しい Highlight も Block ID 付きで state.db に残る
-	states, err := state.NewSQLiteStateStore(p.StateFile()).ListHighlightIDs(context.Background(), dryRunBookExact.ID)
-	if err != nil {
-		t.Fatalf("ListHighlightIDs error = %v, want nil", err)
-	}
-	saved := map[string]string{}
-	for id, h := range states {
-		saved[id] = h.DestinationHighlightID
-	}
-	wantSaved := map[string]string{
-		"a-HIGHLIGHT-1":       "block-1",
-		"a-NOTE-2":            "appended-1",
-		recoverInterrupted.ID: "block-interrupted",
-		recoverNew.ID:         "appended-2",
-	}
-	if !reflect.DeepEqual(saved, wantSaved) {
-		t.Errorf("saved Block IDs = %v, want %v", saved, wantSaved)
-	}
-
-	// 3 回目: 追記の要求は 0 回で、どの Highlight ID の Sync Marker もページに 1 つだけ
-	stubBrowser(t, newBrowser(append(slices.Clone(exactHighlights), recoverInterrupted, recoverNew)...), nil)
-	before = len(requests())
-	if code, _, stderr := runSyncApply(t); code != 0 || stderr != "" {
-		t.Fatalf("run 3: run(sync) = %d, stderr = %q, want 0 and empty", code, stderr)
-	}
-	if got := appendRequests(requests()[before:]); len(got) != 0 {
-		t.Errorf("run 3: append requests = %q, want none", got)
-	}
-	for _, h := range append(slices.Clone(exactHighlights), recoverInterrupted, recoverNew) {
-		if got := recoverMarkerCount(h.ID, initialBlocksReply, appendBodies); got != 1 {
-			t.Errorf("Sync Marker count of %s = %d, want 1", h.ID, got)
-		}
+			if tt.wantSaved != nil {
+				states, err := state.NewSQLiteStateStore(p.StateFile()).ListHighlightIDs(context.Background(), dryRunBookExact.ID)
+				if err != nil {
+					t.Fatalf("ListHighlightIDs error = %v, want nil", err)
+				}
+				saved := map[string]string{}
+				for id, h := range states {
+					saved[id] = h.DestinationHighlightID
+				}
+				if !reflect.DeepEqual(saved, tt.wantSaved) {
+					t.Errorf("saved Block IDs = %v, want %v", saved, tt.wantSaved)
+				}
+			}
+			if tt.wantSingleMarkers {
+				// ページの Sync Marker は、初めからある block と追記の要求の body の合計
+				page := initialBlocksReply + strings.Join(appendBodies, "")
+				for _, h := range recoverAllHighlights() {
+					if got := strings.Count(page, "khs:"+h.ID); got != 1 {
+						t.Errorf("Sync Marker count of %s = %d, want 1", h.ID, got)
+					}
+				}
+			}
+		})
 	}
 }
