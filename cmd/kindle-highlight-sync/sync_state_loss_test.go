@@ -66,103 +66,120 @@ func stateLossSyncOnce(t *testing.T, p config.Paths) {
 		t.Fatal("initial_sync_completed_at recorded = false after the first sync, want true")
 	}
 	if err := os.Remove(filepath.Join(p.DataDir, "state.db")); err != nil {
-		t.Fatal(err)
+		t.Fatalf("os.Remove(state.db) error = %v, want nil", err)
 	}
 }
 
-func TestSyncStateLoss(t *testing.T) {
-	t.Run("state.db を消した後の sync は確認なしで既存のページに照合し、追記 0 件で State を作り直す", func(t *testing.T) {
-		p := setupXDG(t, validConfigTOML)
-		requests, _ := setupDryRunNotion(t, stateLossReplies())
-		stubSyncPrompter(t, "", false)
-		stateLossSyncOnce(t, p)
-		before := len(requests())
+// stateLossApplyRequests は消した後の sync が確認なしで進んだときの要求。予定の算出の読み取りのあと、exact のページごとに Property を更新して既知を読み、追記も作成もしない。
+var stateLossApplyRequests = slices.Concat(stateLossReadRequests, []string{"POST " + testDryRunQueryPath,
+	"PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
+	"PATCH " + testPagesPath + "/page-second", "GET " + stateLossSecondBlocksPath})
 
-		b := newStateLossBrowser(stateLossBooks)
-		stubBrowser(t, b, nil)
-		code, stdout, stderr := runSyncApply(t)
-		if code != 0 || stderr != "" {
-			t.Errorf("run(sync) code = %d, stderr = %q, want 0 and empty", code, stderr)
-		}
-		if got, want := planCells(t, stdout), withTargetCount(applyCells("0", "0", "0", "0", "0"), "2", "2"); !reflect.DeepEqual(got, want) {
-			t.Errorf("stdout cells = %q, want %q", got, want)
-		}
-		got := requests()[before:]
-		assertRequests(t, got, slices.Concat(stateLossReadRequests, []string{"POST " + testDryRunQueryPath,
-			"PATCH " + testPagesPath + "/page-exact", "GET " + testDryRunBlocksPath,
-			"PATCH " + testPagesPath + "/page-second", "GET " + stateLossSecondBlocksPath})...)
-		for _, r := range got {
-			if r.method == http.MethodPatch && strings.HasPrefix(r.path, testPagesPath+"/") {
-				// §12 の Subsequent Sync 列。title と Kindle ID Property は body に入らない
-				for _, banned := range []string{`"title"`, dryRunKindleIDProp, dryRunBookExact.Title, stateLossBookSecond.Title} {
-					if strings.Contains(r.body, banned) {
-						t.Errorf("PATCH %s body = %s, want no %s", r.path, r.body, banned)
+// wantStateLossNotConfirmedErr は Kindle にだけ在る Book 1 冊（Create 1 件・Adopt 0 件）で確認が要るときの標準エラー。
+const wantStateLossNotConfirmedErr = "configuration / confirmation required: initial sync will create 1 books and adopt 0 existing pages: run sync with --yes to confirm without a terminal\n"
+
+func TestSyncStateLoss(t *testing.T) {
+	tests := []struct {
+		name         string
+		books        []domain.Book
+		wantCode     int
+		wantStderr   string
+		wantCells    [][]string // nil なら標準出力の件数は確かめない
+		wantRequests []string
+		wantRecorded bool
+	}{
+		{
+			name:         "state.db を消した後の sync は確認なしで既存のページに照合し、追記 0 件で State を作り直す",
+			books:        stateLossBooks,
+			wantCode:     0,
+			wantCells:    withTargetCount(applyCells("0", "0", "0", "0", "0"), "2", "2"),
+			wantRequests: stateLossApplyRequests,
+			wantRecorded: true,
+		},
+		{
+			name:         "state.db を消したうえで Kindle にだけ在る Book があれば、Create 1 件の Initial Sync の確認を要して exit 3 で終わる",
+			books:        append(slices.Clone(stateLossBooks), dryRunBookNew),
+			wantCode:     3,
+			wantStderr:   wantStateLossNotConfirmedErr,
+			wantRequests: stateLossReadRequests,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := setupXDG(t, validConfigTOML)
+			requests, _ := setupDryRunNotion(t, stateLossReplies())
+			stubSyncPrompter(t, "", false)
+			stateLossSyncOnce(t, p)
+			before := len(requests())
+
+			stubBrowser(t, newStateLossBrowser(tt.books), nil)
+			code, stdout, stderr := runSyncApply(t)
+			if code != tt.wantCode {
+				t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
+			}
+			if stderr != tt.wantStderr {
+				t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
+			}
+			if tt.wantCells != nil {
+				if got := planCells(t, stdout); !reflect.DeepEqual(got, tt.wantCells) {
+					t.Errorf("stdout cells = %q, want %q", got, tt.wantCells)
+				}
+			}
+			got := requests()[before:]
+			assertRequests(t, got, tt.wantRequests...)
+			for _, r := range got {
+				if r.method == http.MethodPatch && strings.HasPrefix(r.path, testPagesPath+"/") {
+					// §12 の Subsequent Sync 列。title と Kindle ID Property は body に入らない
+					for _, banned := range []string{`"title"`, dryRunKindleIDProp, dryRunBookExact.Title, stateLossBookSecond.Title} {
+						if strings.Contains(r.body, banned) {
+							t.Errorf("PATCH %s body = %s, want no %s", r.path, r.body, banned)
+						}
 					}
 				}
 			}
-		}
-		if !initialSyncRecorded(t, p) {
-			t.Error("initial_sync_completed_at recorded = false, want true")
-		}
+			if recorded := initialSyncRecorded(t, p); recorded != tt.wantRecorded {
+				t.Errorf("initial_sync_completed_at recorded = %v, want %v", recorded, tt.wantRecorded)
+			}
+			if tt.wantRecorded {
+				assertStateLossRebuilt(t, p)
+			}
+		})
+	}
+}
 
-		store := state.NewSQLiteStateStore(p.StateFile())
-		for _, book := range stateLossBooks {
-			hs, err := store.ListHighlightIDs(context.Background(), book.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			gotIDs := make([]string, 0, len(hs))
-			for id, h := range hs {
-				gotIDs = append(gotIDs, id)
-				if h.DestinationHighlightID == "" {
-					t.Errorf("highlights[%s].DestinationHighlightID = %q, want a Block ID", id, h.DestinationHighlightID)
-				}
-			}
-			slices.Sort(gotIDs)
-			var wantIDs []string
-			for _, h := range stateLossHighlights[book.ID] {
-				wantIDs = append(wantIDs, h.ID)
-			}
-			slices.Sort(wantIDs)
-			if !slices.Equal(gotIDs, wantIDs) {
-				t.Errorf("highlights of %s = %q, want %q", book.ID, gotIDs, wantIDs)
-			}
-		}
-		books, err := store.ListBooks(context.Background())
+// assertStateLossRebuilt は作り直した state.db に、全 Highlight が Block ID 付きで highlights に、全 Book が books に在ることを確かめる。
+func assertStateLossRebuilt(t *testing.T, p config.Paths) {
+	t.Helper()
+	store := state.NewSQLiteStateStore(p.StateFile())
+	for _, book := range stateLossBooks {
+		hs, err := store.ListHighlightIDs(context.Background(), book.ID)
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("ListHighlightIDs(%s) error = %v, want nil", book.ID, err)
 		}
-		for _, book := range stateLossBooks {
-			if _, ok := books[book.ID]; !ok {
-				t.Errorf("books[%s] recorded = false, want true", book.ID)
+		gotIDs := make([]string, 0, len(hs))
+		for id, h := range hs {
+			gotIDs = append(gotIDs, id)
+			if h.DestinationHighlightID == "" {
+				t.Errorf("highlights[%s].DestinationHighlightID = %q, want a Block ID", id, h.DestinationHighlightID)
 			}
 		}
-	})
-
-	t.Run("state.db を消したうえで Kindle にだけ在る Book があれば、Initial Sync の確認を要して exit 3 で終わる", func(t *testing.T) {
-		p := setupXDG(t, validConfigTOML)
-		requests, _ := setupDryRunNotion(t, stateLossReplies())
-		stubSyncPrompter(t, "", false)
-		stateLossSyncOnce(t, p)
-		before := len(requests())
-
-		stubBrowser(t, newStateLossBrowser(append(slices.Clone(stateLossBooks), dryRunBookNew)), nil)
-		code, _, stderr := runSyncApply(t)
-		if code != 3 {
-			t.Errorf("run(sync) code = %d, want 3", code)
+		slices.Sort(gotIDs)
+		var wantIDs []string
+		for _, h := range stateLossHighlights[book.ID] {
+			wantIDs = append(wantIDs, h.ID)
 		}
-		if want := "run sync with --yes"; !strings.Contains(stderr, want) {
-			t.Errorf("run(sync) stderr = %q, want to contain %q", stderr, want)
+		slices.Sort(wantIDs)
+		if !slices.Equal(gotIDs, wantIDs) {
+			t.Errorf("highlights of %s = %q, want %q", book.ID, gotIDs, wantIDs)
 		}
-		got := requests()[before:]
-		if w := writeRequests(got); len(w) != 0 {
-			t.Errorf("write requests = %q, want none", w)
+	}
+	books, err := store.ListBooks(context.Background())
+	if err != nil {
+		t.Fatalf("ListBooks() error = %v, want nil", err)
+	}
+	for _, book := range stateLossBooks {
+		if _, ok := books[book.ID]; !ok {
+			t.Errorf("books[%s] recorded = false, want true", book.ID)
 		}
-		if a := appendRequests(got); len(a) != 0 {
-			t.Errorf("append requests = %q, want none", a)
-		}
-		if initialSyncRecorded(t, p) {
-			t.Error("initial_sync_completed_at recorded = true, want false")
-		}
-	})
+	}
 }
