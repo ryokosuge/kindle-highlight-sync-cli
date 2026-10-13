@@ -364,7 +364,7 @@ func TestSync(t *testing.T) {
 		}
 	})
 
-	t.Run("Book 一覧が構造の異常を返すと exit 8 で終わり、見つからなかった構造を 1 行出す", func(t *testing.T) {
+	t.Run("Book 一覧が構造の異常を返すと exit 7 で終わり、見つからなかった構造を 1 行出す", func(t *testing.T) {
 		// internal/source の listBooks が返す実際の形（newFormatError で包まれた SourceFormat の種類）
 		listErr := exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: list books: page 1: %w",
 			fmt.Errorf("source: library page: notebook root container is missing: %w", source.ErrSourceFormat)))
