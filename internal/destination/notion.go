@@ -49,12 +49,32 @@ func (d *NotionDestination) ensureIndex(ctx context.Context) error {
 	if d.index != nil {
 		return nil
 	}
-	pages, err := d.client.QueryDataSource(ctx, d.notion.DataSourceID)
+	index, err := d.queryIndex(ctx)
 	if err != nil {
 		return err
 	}
-	d.index = NewBookIndex(indexedBooks(pages, d.notion.Mapping), d.notion.Mapping.Author != "")
+	d.index = index
 	return nil
+}
+
+func (d *NotionDestination) queryIndex(ctx context.Context) (*BookIndex, error) {
+	pages, err := d.client.QueryDataSource(ctx, d.notion.DataSourceID)
+	if err != nil {
+		return nil, err
+	}
+	return NewBookIndex(indexedBooks(pages, d.notion.Mapping), d.notion.Mapping.Author != ""), nil
+}
+
+// RefindBook は手元の index を使わず Data Source を全件取り直して index を作り直し、FindBook と同じ規則で照合する。
+// 取り直しに成功したときだけ index を差し替える。失敗したら error（exitcode.Notion）をそのまま返し、それまでの index を残す。
+// Notion へは読み取りの要求しか送らない。
+func (d *NotionDestination) RefindBook(ctx context.Context, book domain.Book) (BookMatch, error) {
+	index, err := d.queryIndex(ctx)
+	if err != nil {
+		return BookMatch{}, err
+	}
+	d.index = index
+	return index.Match(book), nil
 }
 
 // ListHighlightIDs は Book のページの直下の子 block を全件取り、Sync Marker のある Quote Block（§21）を

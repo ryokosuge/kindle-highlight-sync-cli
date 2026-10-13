@@ -16,11 +16,14 @@ import (
 type fakeDestination struct {
 	matches           map[string]destination.BookMatch
 	errs              map[string]error
-	remoteIDs         map[string][]string // ページ ID ごとに ListHighlightIDs が返す Highlight ID
-	listErrs          map[string]error    // ページ ID ごとに ListHighlightIDs が返す error
-	writeErrs         map[string]error    // Book ID ごとに CreateBook / AdoptBook / UpdateBook が返す error
-	appendErrs        map[string]error    // ページ ID ごとに AppendHighlights が返す error
-	appendedBeforeErr map[string]int      // ページ ID ごとに、appendErrs で失敗する前に追記できた件数
+	remoteIDs         map[string][]string              // ページ ID ごとに ListHighlightIDs が返す Highlight ID
+	listErrs          map[string]error                 // ページ ID ごとに ListHighlightIDs が返す error
+	writeErrs         map[string]error                 // Book ID ごとに CreateBook / AdoptBook / UpdateBook が返す error
+	appendErrs        map[string]error                 // ページ ID ごとに AppendHighlights が返す error
+	appendedBeforeErr map[string]int                   // ページ ID ごとに、appendErrs で失敗する前に追記できた件数
+	refindMatches     map[string]destination.BookMatch // Book ID ごとに RefindBook が返す結果
+	refindErrs        map[string]error                 // Book ID ごとに RefindBook が返す error
+	refindCalls       []string                         // RefindBook に渡った Book ID の順
 	calls             []string
 	appends           map[string][]string // ページ ID ごとに AppendHighlights に渡った Highlight ID の順
 	listCalls         []string            // ListHighlightIDs に渡ったページ ID の順
@@ -33,6 +36,14 @@ func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destina
 		return destination.BookMatch{}, err
 	}
 	return f.matches[book.ID], nil
+}
+
+func (f *fakeDestination) RefindBook(_ context.Context, book domain.Book) (destination.BookMatch, error) {
+	f.refindCalls = append(f.refindCalls, book.ID)
+	if err, ok := f.refindErrs[book.ID]; ok {
+		return destination.BookMatch{}, err
+	}
+	return f.refindMatches[book.ID], nil
 }
 
 // CreateBook は呼ばれたことを writes に記録し、Book ID から決まる ID のページを返す。BuildPlan は書き込まないので呼ばれない。
