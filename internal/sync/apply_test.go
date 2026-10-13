@@ -1271,3 +1271,181 @@ func TestApplyBooksRecheckCanceled(t *testing.T) {
 		t.Errorf("listCalls = %v, want 追記の前の 1 回だけ（待たずに抜ける）", dst.listCalls)
 	}
 }
+
+func TestApplyBooksRefindCreate(t *testing.T) {
+	unknown := unknownOutcomeError(t, http.StatusServiceUnavailable, "")
+	badRequest := unknownOutcomeError(t, http.StatusBadRequest, "")
+	created := destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-created"}}
+	none := destination.BookMatch{Status: destination.BookMatchNone}
+	one := []domain.Book{{ID: "book-new", ASIN: "ASIN-new", Title: "New Book"}}
+	failedCreate := []FailedBook{{BookID: "book-new", Kind: FailureNotionWrite}}
+	tests := []struct {
+		name        string
+		books       []domain.Book
+		createErrs  []error
+		refinds     []destination.BookMatch
+		refindErr   error
+		want        ApplyResult
+		wantWrites  []string
+		wantRefinds []string
+		wantAppends map[string][]string
+		wantWaits   int
+		wantCode    int
+		wantErr     string
+	}{
+		{
+			name:        "結果が分からない失敗のあと exact なら作成済みのページに追記し、CreateBook は呼び直さない",
+			books:       one,
+			createErrs:  []error{unknown},
+			refinds:     []destination.BookMatch{created},
+			want:        ApplyResult{Refound: []string{"book-new"}, Recovered: []string{"book-new"}, Appended: 3},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new"},
+			wantAppends: map[string][]string{"page-created": {"a-1", "a-2", "a-3"}},
+		},
+		{
+			name:        "1 回目が none でも待ってからの 2 回目が exact なら作成済みのページを使う",
+			books:       one,
+			createErrs:  []error{unknown},
+			refinds:     []destination.BookMatch{none, created},
+			want:        ApplyResult{Refound: []string{"book-new"}, Recovered: []string{"book-new"}, Appended: 3},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new", "book-new"},
+			wantAppends: map[string][]string{"page-created": {"a-1", "a-2", "a-3"}},
+			wantWaits:   1,
+		},
+		{
+			name:        "2 回続けて none なら CreateBook をもう 1 回だけ呼ぶ",
+			books:       one,
+			createErrs:  []error{unknown},
+			refinds:     []destination.BookMatch{none},
+			want:        ApplyResult{Created: []string{"book-new"}, Refound: []string{"book-new"}, Appended: 3},
+			wantWrites:  []string{"create book-new", "create book-new"},
+			wantRefinds: []string{"book-new", "book-new"},
+			wantAppends: map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}},
+			wantWaits:   1,
+		},
+		{
+			name:        "作り直しの CreateBook が失敗したら照合し直さずその Book が失敗として残る",
+			books:       one,
+			createErrs:  []error{unknown, unknown},
+			refinds:     []destination.BookMatch{none},
+			want:        ApplyResult{Refound: []string{"book-new"}, Failed: failedCreate},
+			wantWrites:  []string{"create book-new", "create book-new"},
+			wantRefinds: []string{"book-new", "book-new"},
+			wantWaits:   1,
+		},
+		{
+			name:        "照合し直しが ambiguous なら CreateBook も AdoptBook も呼ばず失敗として残り、残りの Book は続く",
+			books:       []domain.Book{{ID: "book-new", ASIN: "ASIN-new"}, {ID: "book-next", ASIN: "ASIN-next"}},
+			createErrs:  []error{unknown},
+			refinds:     []destination.BookMatch{{Status: destination.BookMatchAmbiguous}},
+			want:        ApplyResult{Created: []string{"book-next"}, Refound: []string{"book-new"}, Failed: failedCreate, Appended: 3},
+			wantWrites:  []string{"create book-new", "create book-next"},
+			wantRefinds: []string{"book-new"},
+			wantAppends: map[string][]string{"page-book-next": {"a-1", "a-2", "a-3"}},
+		},
+		{
+			name:        "照合し直しが adoptable なら CreateBook も AdoptBook も呼ばず失敗として残る",
+			books:       one,
+			createErrs:  []error{unknown},
+			refinds:     []destination.BookMatch{{Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "page-adopt"}}},
+			want:        ApplyResult{Refound: []string{"book-new"}, Failed: failedCreate},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new"},
+		},
+		{
+			name:        "照合し直しの読み取りが 500 で失敗したら CreateBook も AdoptBook も呼ばず失敗として残る",
+			books:       one,
+			createErrs:  []error{unknown},
+			refindErr:   notionStatusError(http.StatusInternalServerError),
+			want:        ApplyResult{Refound: []string{"book-new"}, Failed: failedCreate},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new"},
+		},
+		{
+			name:        "照合し直しの読み取りが 401 で失敗したらその時点で exitcode.Notion の error を返す",
+			books:       []domain.Book{{ID: "book-new", ASIN: "ASIN-new"}, {ID: "book-next", ASIN: "ASIN-next"}},
+			createErrs:  []error{unknown},
+			refindErr:   notionStatusError(http.StatusUnauthorized),
+			want:        ApplyResult{Refound: []string{"book-new"}},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new"},
+			wantCode:    4,
+			wantErr:     "sync: notion write failed book-new: HTTP 401 Unauthorized",
+		},
+		{
+			name:        "照合し直しの読み取りが 403 で失敗したらその時点で exitcode.Notion の error を返す",
+			books:       one,
+			createErrs:  []error{unknown},
+			refindErr:   notionStatusError(http.StatusForbidden),
+			want:        ApplyResult{Refound: []string{"book-new"}},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new"},
+			wantCode:    4,
+			wantErr:     "sync: notion write failed book-new: HTTP 403 Forbidden",
+		},
+		{
+			name:        "照合し直しの読み取りが 404 で失敗したらその時点で exitcode.Notion の error を返す",
+			books:       one,
+			createErrs:  []error{unknown},
+			refindErr:   notionStatusError(http.StatusNotFound),
+			want:        ApplyResult{Refound: []string{"book-new"}},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new"},
+			wantCode:    4,
+			wantErr:     "sync: notion write failed book-new: HTTP 404 Not Found",
+		},
+		{
+			name:       "結果が分からない失敗に当たらない 400 では照合し直さない",
+			books:      one,
+			createErrs: []error{badRequest},
+			want:       ApplyResult{Failed: failedCreate},
+			wantWrites: []string{"create book-new"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := &fakeDestination{
+				matches:      map[string]destination.BookMatch{"book-new": none, "book-next": none},
+				createErrSeq: map[string][]error{"book-new": tt.createErrs},
+				refindSeq:    map[string][]destination.BookMatch{"book-new": tt.refinds},
+				refindErrs:   map[string]error{},
+			}
+			if tt.refindErr != nil {
+				dst.refindErrs["book-new"] = tt.refindErr
+			}
+			src := &fakeSource{highlights: map[string][]domain.Highlight{
+				"book-new": applyHighlights("a-1", "a-2", "a-3"), "book-next": applyHighlights("a-1", "a-2", "a-3"),
+			}}
+			waits := 0
+			oldSleep, oldJitter := recheckSleep, recheckJitter
+			recheckSleep = func(context.Context, time.Duration) error { waits++; return nil }
+			recheckJitter = func() time.Duration { return 0 }
+			t.Cleanup(func() { recheckSleep, recheckJitter = oldSleep, oldJitter })
+
+			got, err := ApplyBooks(context.Background(), tt.books, src, dst, &fakeState{}, applyNow)
+			if code := exitcode.Code(err); code != tt.wantCode {
+				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", code, tt.wantCode, err)
+			}
+			if err != nil && err.Error() != tt.wantErr {
+				t.Errorf("err = %q, want %q", err.Error(), tt.wantErr)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ApplyBooks() = %+v, want %+v", got, tt.want)
+			}
+			if !slices.Equal(dst.writes, tt.wantWrites) {
+				t.Errorf("writes = %v, want %v", dst.writes, tt.wantWrites)
+			}
+			if !slices.Equal(dst.refindCalls, tt.wantRefinds) {
+				t.Errorf("refindCalls = %v, want %v", dst.refindCalls, tt.wantRefinds)
+			}
+			if !reflect.DeepEqual(dst.appends, tt.wantAppends) {
+				t.Errorf("appends = %v, want %v", dst.appends, tt.wantAppends)
+			}
+			if waits != tt.wantWaits {
+				t.Errorf("waits = %d, want %d", waits, tt.wantWaits)
+			}
+		})
+	}
+}

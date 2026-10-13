@@ -16,18 +16,31 @@ import (
 type fakeDestination struct {
 	matches           map[string]destination.BookMatch
 	errs              map[string]error
-	remoteIDs         map[string][]string              // ページ ID ごとに ListHighlightIDs が返す Highlight ID
-	listErrs          map[string]error                 // ページ ID ごとに ListHighlightIDs が返す error
-	writeErrs         map[string]error                 // Book ID ごとに CreateBook / AdoptBook / UpdateBook が返す error
-	appendErrs        map[string]error                 // ページ ID ごとに AppendHighlights が返す error
-	appendedBeforeErr map[string]int                   // ページ ID ごとに、appendErrs で失敗する前に追記できた件数
-	refindMatches     map[string]destination.BookMatch // Book ID ごとに RefindBook が返す結果
-	refindErrs        map[string]error                 // Book ID ごとに RefindBook が返す error
-	refindCalls       []string                         // RefindBook に渡った Book ID の順
+	remoteIDs         map[string][]string                // ページ ID ごとに ListHighlightIDs が返す Highlight ID
+	listErrs          map[string]error                   // ページ ID ごとに ListHighlightIDs が返す error
+	writeErrs         map[string]error                   // Book ID ごとに CreateBook / AdoptBook / UpdateBook が返す error
+	appendErrs        map[string]error                   // ページ ID ごとに AppendHighlights が返す error
+	appendedBeforeErr map[string]int                     // ページ ID ごとに、appendErrs で失敗する前に追記できた件数
+	refindMatches     map[string]destination.BookMatch   // Book ID ごとに RefindBook が返す結果
+	refindErrs        map[string]error                   // Book ID ごとに RefindBook が返す error
+	refindSeq         map[string][]destination.BookMatch // Book ID ごとに RefindBook が呼ばれた順に返す結果。尽きたら最後を返す。あれば refindMatches より優先
+	createErrSeq      map[string][]error                 // Book ID ごとに CreateBook が呼ばれた順に返す error。nil は成功。尽きたら成功。あれば writeErrs より優先
+	refindCalls       []string                           // RefindBook に渡った Book ID の順
 	calls             []string
 	appends           map[string][]string // ページ ID ごとに AppendHighlights に渡った Highlight ID の順
 	listCalls         []string            // ListHighlightIDs に渡ったページ ID の順
 	writes            []string            // 呼ばれた CreateBook / AdoptBook / UpdateBook の順（"create <Book ID>" / "adopt <ページ ID> <Book ID>" / "update <ページ ID> <Book ID>"）
+}
+
+// countOf は s に v が現れる回数。
+func countOf(s []string, v string) int {
+	n := 0
+	for _, e := range s {
+		if e == v {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeDestination) FindBook(_ context.Context, book domain.Book) (destination.BookMatch, error) {
@@ -43,12 +56,21 @@ func (f *fakeDestination) RefindBook(_ context.Context, book domain.Book) (desti
 	if err, ok := f.refindErrs[book.ID]; ok {
 		return destination.BookMatch{}, err
 	}
+	if seq := f.refindSeq[book.ID]; len(seq) > 0 {
+		return seq[min(countOf(f.refindCalls, book.ID), len(seq))-1], nil
+	}
 	return f.refindMatches[book.ID], nil
 }
 
 // CreateBook は呼ばれたことを writes に記録し、Book ID から決まる ID のページを返す。BuildPlan は書き込まないので呼ばれない。
 func (f *fakeDestination) CreateBook(_ context.Context, book domain.Book) (destination.RemoteBook, error) {
 	f.writes = append(f.writes, "create "+book.ID)
+	if seq, ok := f.createErrSeq[book.ID]; ok {
+		if n := countOf(f.writes, "create "+book.ID); n <= len(seq) && seq[n-1] != nil {
+			return destination.RemoteBook{}, seq[n-1]
+		}
+		return destination.RemoteBook{ID: "page-" + book.ID}, nil
+	}
 	if err, ok := f.writeErrs[book.ID]; ok {
 		return destination.RemoteBook{}, err
 	}
