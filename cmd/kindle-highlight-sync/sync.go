@@ -37,12 +37,16 @@ var checkAuth = func(ctx context.Context, b browser) error {
 // newSyncPrompter は Initial Sync の確認の入出力を作る。テストは入力を差し替える。
 var newSyncPrompter = newPrompter
 
-// syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得して追記する。
+// syncBody は排他の内側で行う sync の処理。Chrome を起動する前に State の同期先と config.toml の data_source_id を照合する（§35）。
+// Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得して追記する。
 // a.dryRun なら Highlight の取得は照合（BuildPlan）の中で 1 回だけ行い、予定の表を a.out に出して Notion と State は書かない（§63）。
 // initial_sync_completed_at が無ければ Initial Sync として、予定を組んで Create / Adopt の件数の確認を取ってから取得に進み（§47）、
 // 確認の後ろで none の Book を作成し adoptable の Book を Adopt して、件数を出す（§51）。skip・書き込みの失敗は exit 8（§72）。取得を終えた run を記録する（§48）。
 var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	startedAt := time.Now() // Highlight と Book の LastSyncedAt に入れる、sync の開始時刻
+	if err := checkDataSource(ctx, a); err != nil {
+		return err
+	}
 	// Open に渡す ctx にタイムアウトを付けると Chrome ごと止まるので、Notebook を開く action だけに付ける
 	b, err := openBrowser(ctx, source.Options{
 		ProfileDir: a.paths.BrowserProfileDir(),
@@ -123,6 +127,30 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// 全 Book に共通の失敗はここに届かず記録しない
 	record = !synced
 	return applied.PartialFailure()
+}
+
+// checkDataSource は State に記録された同期先（sync_meta.data_source_id）と config.toml の notion.data_source_id を照合する（§35 の config validation）。
+// 食い違えば exitcode.LocalState（6）で止める。未記録なら、State を最初に書くより前にこの run の同期先を記録する。--dry-run では記録しない（§63）。
+// config.toml が無ければ照合しない（同期先の組み立てが exit 3 で止める）。
+func checkDataSource(ctx context.Context, a *app) error {
+	if a.config == nil {
+		return nil
+	}
+	want := a.config.Notion.DataSourceID
+	got, ok, err := a.store.DataSourceID(ctx)
+	if err != nil {
+		return err // state.db を読めない失敗は exitcode.LocalState（6）で包まれている
+	}
+	if ok {
+		if got != want {
+			return exitcode.New(exitcode.LocalState, fmt.Errorf("sync: the Notion data source recorded in %s differs from notion.data_source_id in %s; move %s aside and run sync again", a.paths.StateFile(), a.paths.ConfigFile, a.paths.StateFile()))
+		}
+		return nil
+	}
+	if a.dryRun {
+		return nil
+	}
+	return a.store.SaveDataSourceID(ctx, want)
 }
 
 // selectTargets は State の books の last_synced_at から、この run で同期する Book を選ぶ。--full なら全 Book を返す。

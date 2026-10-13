@@ -17,6 +17,11 @@ const localStateCode = 6
 
 var completedAt = time.Date(2026, 10, 11, 13, 4, 5, 0, time.UTC)
 
+const (
+	testDataSourceID      = "ds-test-195"
+	testOtherDataSourceID = "ds-other-195"
+)
+
 // newTestStore は t.TempDir の中の state.db を指す store とその path を返す。ファイルは作らない。
 func newTestStore(t *testing.T) (*SQLiteStateStore, string) {
 	t.Helper()
@@ -285,6 +290,202 @@ func TestSQLiteStateStore_MarkInitialSyncCompleted(t *testing.T) {
 				err := s.MarkInitialSyncCompleted(ctx, completedAt)
 				if err == nil {
 					t.Fatal("MarkInitialSyncCompleted() error = nil, want an error")
+				}
+				if got := exitcode.Code(err); got != localStateCode {
+					t.Errorf("exitcode.Code(err) = %d, want %d (err = %v)", got, localStateCode, err)
+				}
+			})
+		}
+	})
+}
+
+func TestSQLiteStateStore_DataSourceID(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("未記録", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			setup func(t *testing.T, path string)
+		}{
+			{
+				name:  "state.db が無い",
+				setup: func(*testing.T, string) {},
+			},
+			{
+				name: "sync_meta が無い",
+				setup: func(t *testing.T, path string) {
+					execSQL(t, path, `CREATE TABLE sync_runs (id INTEGER PRIMARY KEY AUTOINCREMENT)`)
+				},
+			},
+			{
+				name: "sync_meta はあるが data_source_id の行が無い",
+				setup: func(t *testing.T, path string) {
+					execSQL(t, path, createSyncMetaSQL, `INSERT INTO sync_meta (key, value) VALUES ('initial_sync_completed_at', '2026-10-11T13:04:05Z')`)
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				tt.setup(t, path)
+				before := dirEntries(t, filepath.Dir(path))
+
+				id, ok, err := s.DataSourceID(ctx)
+				if id != "" || ok || err != nil {
+					t.Errorf("DataSourceID() = (%q, %v, %v), want (%q, %v, %v)", id, ok, err, "", false, nil)
+				}
+				if got := dirEntries(t, filepath.Dir(path)); !reflect.DeepEqual(got, before) {
+					t.Errorf("data dir entries after read = %v, want %v", got, before)
+				}
+			})
+		}
+	})
+
+	t.Run("記録済み", func(t *testing.T) {
+		s, path := newTestStore(t)
+		execSQL(t, path, createSyncMetaSQL,
+			`INSERT INTO sync_meta (key, value) VALUES ('`+keyDataSourceID+`', '`+testDataSourceID+`')`)
+
+		id, ok, err := s.DataSourceID(ctx)
+		if id != testDataSourceID || !ok || err != nil {
+			t.Errorf("DataSourceID() = (%q, %v, %v), want (%q, %v, %v)", id, ok, err, testDataSourceID, true, nil)
+		}
+	})
+
+	t.Run("state.db が開けない・読めないときは exit 6 の種類のエラー", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			setup func(t *testing.T, path string)
+		}{
+			{
+				name: "SQLite の形式でないファイル",
+				setup: func(t *testing.T, path string) {
+					if err := os.WriteFile(path, []byte("state"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+			{
+				name: "path がディレクトリ",
+				setup: func(t *testing.T, path string) {
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				tt.setup(t, path)
+
+				id, ok, err := s.DataSourceID(ctx)
+				if err == nil {
+					t.Fatalf("DataSourceID() = (%q, %v), error = nil, want an error", id, ok)
+				}
+				if got := exitcode.Code(err); got != localStateCode {
+					t.Errorf("exitcode.Code(err) = %d, want %d (err = %v)", got, localStateCode, err)
+				}
+				if id != "" || ok {
+					t.Errorf("DataSourceID() = (%q, %v), want (%q, %v) on error", id, ok, "", false)
+				}
+			})
+		}
+	})
+}
+
+func TestSQLiteStateStore_SaveDataSourceID(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("記録した値を別に開き直した store が返す", func(t *testing.T) {
+		tests := []struct {
+			name                     string
+			setup                    func(t *testing.T, path string)
+			ids                      []string
+			want                     string
+			wantInitialSyncCompleted bool
+		}{
+			{
+				name:  "state.db が無いところへ記録する",
+				setup: func(*testing.T, string) {},
+				ids:   []string{testDataSourceID},
+				want:  testDataSourceID,
+			},
+			{
+				name:  "2 回目の記録で上書きする",
+				setup: func(*testing.T, string) {},
+				ids:   []string{testOtherDataSourceID, testDataSourceID},
+				want:  testDataSourceID,
+			},
+			{
+				name: "sync_meta が既にある state.db へ記録する",
+				setup: func(t *testing.T, path string) {
+					execSQL(t, path, createSyncMetaSQL,
+						`INSERT INTO sync_meta (key, value) VALUES ('`+keyInitialSyncCompletedAt+`', '2026-10-11T13:04:05Z')`)
+				},
+				ids:                      []string{testDataSourceID},
+				want:                     testDataSourceID,
+				wantInitialSyncCompleted: true,
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				tt.setup(t, path)
+				for _, id := range tt.ids {
+					if err := s.SaveDataSourceID(ctx, id); err != nil {
+						t.Fatalf("SaveDataSourceID(%q) error = %v", id, err)
+					}
+				}
+
+				reopened := NewSQLiteStateStore(path)
+				id, ok, err := reopened.DataSourceID(ctx)
+				if id != tt.want || !ok || err != nil {
+					t.Errorf("DataSourceID() = (%q, %v, %v), want (%q, %v, %v)", id, ok, err, tt.want, true, nil)
+				}
+				if tt.wantInitialSyncCompleted {
+					at, ok, err := reopened.InitialSyncCompletedAt(ctx)
+					if err != nil {
+						t.Fatalf("InitialSyncCompletedAt() error = %v", err)
+					}
+					if !ok || !at.Equal(completedAt) {
+						t.Errorf("InitialSyncCompletedAt() = (%v, %v), want (%v, %v)", at, ok, completedAt, true)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("state.db が開けない・書けないときは exit 6 の種類のエラー", func(t *testing.T) {
+		tests := []struct {
+			name  string
+			setup func(t *testing.T, path string)
+		}{
+			{
+				name: "SQLite の形式でないファイル",
+				setup: func(t *testing.T, path string) {
+					if err := os.WriteFile(path, []byte("state"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+			{
+				name: "path がディレクトリ",
+				setup: func(t *testing.T, path string) {
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+				},
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s, path := newTestStore(t)
+				tt.setup(t, path)
+
+				err := s.SaveDataSourceID(ctx, testDataSourceID)
+				if err == nil {
+					t.Fatal("SaveDataSourceID() error = nil, want an error")
 				}
 				if got := exitcode.Code(err); got != localStateCode {
 					t.Errorf("exitcode.Code(err) = %d, want %d (err = %v)", got, localStateCode, err)
