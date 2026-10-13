@@ -90,7 +90,7 @@ func (r ApplyResult) PartialFailure() error {
 // ApplyBooks は Book ごとに照合し、none なら CreateBook、adoptable なら AdoptBook、exact なら UpdateBook を呼び、ambiguous は skip する（§51）。
 // ページが決まった Book（none は作成後、adoptable は Adopt 後、exact は UpdateBook 後）は、Source の Highlight を取り、
 // State の既知に無い Highlight（Candidates）があるときだけ Notion の既知（ListHighlightIDs）を取って、さらに既知を除いた残りを Source から取った順のまま AppendHighlights に渡す（§24 / §26）。
-// State の既知で足りる Book は Notion の一覧も追記も呼ばない。作成した Book はページが空なので State も Notion の一覧も見ず、全部を渡す。
+// State の既知で足りる Book は Notion の一覧も追記も呼ばない。none の Book は、作成したページも照合し直しで見つけたページも、この実行で作った（見つけた）もので State が知る Highlight を持たないので、State も Notion の一覧も見ず全部を渡す。
 // Notion にあり State に無い Highlight（backfill）と追記できた Highlight は Block ID 付きで Book ごとに 1 回 SaveHighlights する。now は LastSyncedAt に入れる。
 // 追記が失敗しても、成功した分を保存してから失敗を返す。State の読み取り・保存の失敗は、残りの Book を書かずに exitcode.LocalState の error を返す。
 // Highlight が 0 件の Book は State も Notion の一覧も読まず、追記するものが無い Book では AppendHighlights を呼ばない。
@@ -153,7 +153,7 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 			if created {
 				r.Created = append(r.Created, b.ID)
 			}
-			if err := r.syncHighlights(ctx, b, remote, !created, src, dst, st, now); err != nil {
+			if err := r.syncHighlights(ctx, b, remote, false, src, dst, st, now); err != nil {
 				return r, err
 			}
 		case destination.BookMatchAmbiguous:

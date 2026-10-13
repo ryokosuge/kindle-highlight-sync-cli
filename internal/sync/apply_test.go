@@ -1288,7 +1288,9 @@ func TestApplyBooksRefindCreate(t *testing.T) {
 		want        ApplyResult
 		wantWrites  []string
 		wantRefinds []string
+		stateRows   map[string]state.HighlightState // fakeState に残っている旧 Highlight（Highlight ID → 行）
 		wantAppends map[string][]string
+		wantMarks   []state.BookState // nil なら MarkBookSynced は確かめない
 		wantWaits   int
 		wantCode    int
 		wantErr     string
@@ -1302,6 +1304,18 @@ func TestApplyBooksRefindCreate(t *testing.T) {
 			wantWrites:  []string{"create book-new"},
 			wantRefinds: []string{"book-new"},
 			wantAppends: map[string][]string{"page-created": {"a-1", "a-2", "a-3"}},
+		},
+		{
+			name:        "State に旧 Highlight が残っていても exact の新しいページには全件を追記し、そのページで同期済みに記録する",
+			books:       one,
+			createErrs:  []error{unknown},
+			refinds:     []destination.BookMatch{created},
+			stateRows:   map[string]state.HighlightState{"a-1": stateRow("book-new", "a-1", "old-block-1"), "a-2": stateRow("book-new", "a-2", "old-block-2")},
+			want:        ApplyResult{Refound: []string{"book-new"}, Recovered: []string{"book-new"}, Appended: 3},
+			wantWrites:  []string{"create book-new"},
+			wantRefinds: []string{"book-new"},
+			wantAppends: map[string][]string{"page-created": {"a-1", "a-2", "a-3"}},
+			wantMarks:   []state.BookState{{KindleBookID: "book-new", DestinationBookID: "page-created", Title: "New Book", LastSyncedAt: applyNow}},
 		},
 		{
 			name:        "1 回目が none でも待ってからの 2 回目が exact なら作成済みのページを使う",
@@ -1415,6 +1429,10 @@ func TestApplyBooksRefindCreate(t *testing.T) {
 			if tt.refindErr != nil {
 				dst.refindErrs["book-new"] = tt.refindErr
 			}
+			st := &fakeState{}
+			if tt.stateRows != nil {
+				st.rows = map[string]map[string]state.HighlightState{"book-new": tt.stateRows}
+			}
 			src := &fakeSource{highlights: map[string][]domain.Highlight{
 				"book-new": applyHighlights("a-1", "a-2", "a-3"), "book-next": applyHighlights("a-1", "a-2", "a-3"),
 			}}
@@ -1424,7 +1442,7 @@ func TestApplyBooksRefindCreate(t *testing.T) {
 			recheckJitter = func() time.Duration { return 0 }
 			t.Cleanup(func() { recheckSleep, recheckJitter = oldSleep, oldJitter })
 
-			got, err := ApplyBooks(context.Background(), tt.books, src, dst, &fakeState{}, applyNow)
+			got, err := ApplyBooks(context.Background(), tt.books, src, dst, st, applyNow)
 			if code := exitcode.Code(err); code != tt.wantCode {
 				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", code, tt.wantCode, err)
 			}
@@ -1442,6 +1460,9 @@ func TestApplyBooksRefindCreate(t *testing.T) {
 			}
 			if !reflect.DeepEqual(dst.appends, tt.wantAppends) {
 				t.Errorf("appends = %v, want %v", dst.appends, tt.wantAppends)
+			}
+			if tt.wantMarks != nil && !reflect.DeepEqual(st.marks, tt.wantMarks) {
+				t.Errorf("marks = %v, want %v", st.marks, tt.wantMarks)
 			}
 			if waits != tt.wantWaits {
 				t.Errorf("waits = %d, want %d", waits, tt.wantWaits)
