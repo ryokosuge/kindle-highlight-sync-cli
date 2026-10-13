@@ -30,6 +30,9 @@ type ApplyResult struct {
 	Skipped []string     // 照合が ambiguous で skip した Book（§51）
 	Failed  []FailedBook // 書き込みが Book 単位で失敗した Book（§72）
 
+	Refound   []string // CreateBook の結果が分からず、Books Database を照合し直した Book
+	Recovered []string // 照合し直しで見つかった作成済みのページを使った Book。Created には載せない
+
 	Appended int // 追記できた Highlight の数。一部だけ成功した Book の成功分と、結果不明のあと確かめ直しで Notion に在ると分かった分も数える
 
 	Rechecked int // 追記の結果が不明で、Notion の Highlight を取り直して確かめた Book の数
@@ -87,14 +90,14 @@ func (r ApplyResult) PartialFailure() error {
 // ApplyBooks は Book ごとに照合し、none なら CreateBook、adoptable なら AdoptBook、exact なら UpdateBook を呼び、ambiguous は skip する（§51）。
 // ページが決まった Book（none は作成後、adoptable は Adopt 後、exact は UpdateBook 後）は、Source の Highlight を取り、
 // State の既知に無い Highlight（Candidates）があるときだけ Notion の既知（ListHighlightIDs）を取って、さらに既知を除いた残りを Source から取った順のまま AppendHighlights に渡す（§24 / §26）。
-// State の既知で足りる Book は Notion の一覧も追記も呼ばない。作成した Book はページが空なので State も Notion の一覧も見ず、全部を渡す。
+// State の既知で足りる Book は Notion の一覧も追記も呼ばない。none の Book は、作成したページも照合し直しで見つけたページも、この実行で作った（見つけた）もので State が知る Highlight を持たないので、State も Notion の一覧も見ず全部を渡す。
 // Notion にあり State に無い Highlight（backfill）と追記できた Highlight は Block ID 付きで Book ごとに 1 回 SaveHighlights する。now は LastSyncedAt に入れる。
 // 追記が失敗しても、成功した分を保存してから失敗を返す。State の読み取り・保存の失敗は、残りの Book を書かずに exitcode.LocalState の error を返す。
 // Highlight が 0 件の Book は State も Notion の一覧も読まず、追記するものが無い Book では AppendHighlights を呼ばない。
 // 取得の順は dry-run（BuildPlan。既知 → Highlight）と違うが、既知を除く判定（unknownHighlights）は共有している。
 // ASIN の無い Book は照合も書き込みも取得もせず FailureNoASIN で Failed に残して残りを続ける。
 // 1 冊の書き込み・既知の取得が 400 / 429 / 5xx / タイムアウトで失敗しても、Highlight の取得が 1 冊だけの構造の異常か Highlight ID が作れない error で失敗しても、その Book を Failed に残して残りを続ける（§72）。
-// タイムアウトで作成の結果が分からない Book は再送しない（§29。次の sync の照合で作成済みなら exact になる）。
+// CreateBook が結果の分からない失敗（notion.OutcomeUnknown）のときは、いきなり再送せず refindCreated で照合し直す（§29）。
 // 追記の結果が分からない失敗（notion.OutcomeUnknown）は、待ってから Notion の Highlight を取り直し、未反映の分だけを 2 回まで送り直す（appendWithRecheck）。
 // 書き込みが 401 / 403 / 404 で失敗したとき（§73）と FindBook が失敗したときは、その時点で残りを書かずに exitcode.Notion の error を返す。
 // 書き込みが context のキャンセルで失敗したときも残りを書かずに止め、元の error を包まずにそのまま返す。
@@ -137,13 +140,19 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 			}
 		case destination.BookMatchNone:
 			remote, err := dst.CreateBook(ctx, b)
+			created := true
+			if err != nil && notion.OutcomeUnknown(err) {
+				remote, created, err = r.refindCreated(ctx, b, err, dst)
+			}
 			if err != nil {
 				if err := r.fail(b.ID, FailureNotionWrite, err); err != nil {
 					return r, err
 				}
 				continue
 			}
-			r.Created = append(r.Created, b.ID)
+			if created {
+				r.Created = append(r.Created, b.ID)
+			}
 			if err := r.syncHighlights(ctx, b, remote, false, src, dst, st, now); err != nil {
 				return r, err
 			}
@@ -152,6 +161,39 @@ func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, d
 		}
 	}
 	return r, nil
+}
+
+// refindCreated は結果の分からない CreateBook の失敗 createErr のあと、Books Database を照合し直して使うページを決める。
+// exact なら作成済みのページを Recovered に数えて返し（created = false）、none なら待ってもう 1 回照合し直して、それでも none のときだけ CreateBook を 1 回呼び直す。
+// 作り直しの失敗は照合し直さずそのまま返す。ambiguous・adoptable・照合し直しの失敗は、CreateBook も AdoptBook も呼ばずに error で返す（呼び出し側が Failed に仕分ける）。
+func (r *ApplyResult) refindCreated(ctx context.Context, book domain.Book, createErr error, dst destination.Destination) (remote destination.RemoteBook, created bool, err error) {
+	r.Refound = append(r.Refound, book.ID)
+	for i := range 2 {
+		if i > 0 {
+			d, ok := recheckDelay(i, createErr)
+			if !ok {
+				return destination.RemoteBook{}, false, createErr
+			}
+			if err := recheckSleep(ctx, d); err != nil {
+				return destination.RemoteBook{}, false, err
+			}
+		}
+		m, err := dst.RefindBook(ctx, book)
+		if err != nil {
+			return destination.RemoteBook{}, false, err
+		}
+		switch m.Status {
+		case destination.BookMatchExact:
+			r.Recovered = append(r.Recovered, book.ID)
+			return *m.Book, false, nil
+		case destination.BookMatchNone:
+			continue
+		default:
+			return destination.RemoteBook{}, false, createErr
+		}
+	}
+	remote, err = dst.CreateBook(ctx, book)
+	return remote, true, err
 }
 
 // syncHighlights は appendUnknown で追記し、追記の残りが 0 で終わった Book だけを books に now で記録する。
