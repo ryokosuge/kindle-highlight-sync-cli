@@ -383,10 +383,13 @@ func TestBuildPlan(t *testing.T) {
 }
 
 func TestBuildPlanError(t *testing.T) {
-	wantErr := exitcode.New(exitcode.Notion, errors.New("notion: query failed"))
+	notionErr := exitcode.New(exitcode.Notion, errors.New("notion: query failed"))
+	localStateErr := exitcode.New(exitcode.LocalState, errors.New("destination: highlight ID scheme mismatch"))
 
 	tests := []struct {
 		name          string
+		wantErr       error
+		wantCode      int
 		dstErrs       map[string]error
 		idsErrs       map[string]error
 		srcErrs       map[string]error
@@ -396,21 +399,36 @@ func TestBuildPlanError(t *testing.T) {
 	}{
 		{
 			name:          "FindBook が 2 冊目で失敗したら 3 冊目には行かない",
-			dstErrs:       map[string]error{"b2": wantErr},
+			wantErr:       notionErr,
+			wantCode:      4,
+			dstErrs:       map[string]error{"b2": notionErr},
 			wantFindCalls: []string{"b1", "b2"},
 			wantIDsCalls:  []string{"p1"},
 			wantListCalls: []string{"b1"},
 		},
 		{
 			name:          "ListHighlightIDs が 2 冊目で失敗したら その Book の Highlight は取らず 3 冊目には行かない",
-			idsErrs:       map[string]error{"p2": wantErr},
+			wantErr:       notionErr,
+			wantCode:      4,
+			idsErrs:       map[string]error{"p2": notionErr},
+			wantFindCalls: []string{"b1", "b2"},
+			wantIDsCalls:  []string{"p1", "p2"},
+			wantListCalls: []string{"b1"},
+		},
+		{
+			name:          "ListHighlightIDs が LocalState の error なら Failed に残さずその error で 3 冊目には行かない",
+			wantErr:       localStateErr,
+			wantCode:      6,
+			idsErrs:       map[string]error{"p2": localStateErr},
 			wantFindCalls: []string{"b1", "b2"},
 			wantIDsCalls:  []string{"p1", "p2"},
 			wantListCalls: []string{"b1"},
 		},
 		{
 			name:          "ListHighlights が 2 冊目で失敗したら 3 冊目には行かない",
-			srcErrs:       map[string]error{"b2": wantErr},
+			wantErr:       notionErr,
+			wantCode:      4,
+			srcErrs:       map[string]error{"b2": notionErr},
 			wantFindCalls: []string{"b1", "b2"},
 			wantIDsCalls:  []string{"p1", "p2"},
 			wantListCalls: []string{"b1", "b2"},
@@ -438,11 +456,11 @@ func TestBuildPlanError(t *testing.T) {
 				errs: tt.srcErrs,
 			}
 			got, err := BuildPlan(context.Background(), books, src, dst)
-			if err != wantErr {
-				t.Errorf("BuildPlan() error = %v, want %v", err, wantErr)
+			if err != tt.wantErr {
+				t.Errorf("BuildPlan() error = %v, want %v", err, tt.wantErr)
 			}
-			if exitcode.Code(err) != 4 {
-				t.Errorf("exitcode.Code(err) = %d, want 4", exitcode.Code(err))
+			if exitcode.Code(err) != tt.wantCode {
+				t.Errorf("exitcode.Code(err) = %d, want %d", exitcode.Code(err), tt.wantCode)
 			}
 			if !reflect.DeepEqual(got, Plan{}) {
 				t.Errorf("BuildPlan() = %+v, want %+v", got, Plan{})
