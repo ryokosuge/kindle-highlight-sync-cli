@@ -1315,7 +1315,7 @@ func TestApplyBooksRefindCreate(t *testing.T) {
 			wantWrites:  []string{"create book-new"},
 			wantRefinds: []string{"book-new"},
 			wantAppends: map[string][]string{"page-created": {"a-1", "a-2", "a-3"}},
-			wantMarks:   []state.BookState{{KindleBookID: "book-new", DestinationBookID: "page-created", Title: "New Book", LastSyncedAt: applyNow}},
+			wantMarks:   []state.BookState{{KindleBookID: "book-new", DestinationBookID: "page-created", ASIN: "ASIN-new", Title: "New Book", LastSyncedAt: applyNow}},
 		},
 		{
 			name:        "1 回目が none でも待ってからの 2 回目が exact なら作成済みのページを使う",
