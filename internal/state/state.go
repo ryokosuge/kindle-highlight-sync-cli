@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// StateStore は §6.3 のうち、Initial Sync の判定と完了の記録、同期を終えた Book の記録と読み取り、
+// StateStore は §6.3 のうち、同期先と Initial Sync の判定・完了の記録、同期を終えた Book の記録と読み取り、
 // Book ごとの既知の Highlight の読み取りと保存を持つ。
 type StateStore interface {
 	// InitialSyncCompletedAt は sync_meta の initial_sync_completed_at を返す。
@@ -16,6 +16,12 @@ type StateStore interface {
 	// MarkInitialSyncCompleted は initial_sync_completed_at に at を記録する（あれば上書き）。
 	// state.db と sync_meta が無ければ作る。
 	MarkInitialSyncCompleted(ctx context.Context, at time.Time) error
+	// DataSourceID は sync_meta の data_source_id（State を書いた同期先の Data Source、§59）を返す。
+	// 未記録（state.db が無い・sync_meta が無い・行が無い）なら ok は false で、エラーにしない。読むだけでは state.db を作らない。
+	DataSourceID(ctx context.Context) (id string, ok bool, err error)
+	// SaveDataSourceID は data_source_id に id を記録する（あれば上書き）。
+	// state.db と sync_meta が無ければ作る。
+	SaveDataSourceID(ctx context.Context, id string) error
 	// ListHighlightIDs は bookID の Book の highlights の行を KindleHighlightID を key にした map で返す。
 	// 未記録（state.db が無い・highlights が無い・その Book の行が無い）なら空の map で、エラーにしない。読むだけでは state.db を作らない。
 	ListHighlightIDs(ctx context.Context, bookID string) (map[string]HighlightState, error)

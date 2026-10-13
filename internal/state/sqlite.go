@@ -19,6 +19,8 @@ const (
 
 	// keyInitialSyncCompletedAt は sync_meta の key（§59）。値は RFC 3339 の UTC。
 	keyInitialSyncCompletedAt = "initial_sync_completed_at"
+	// keyDataSourceID は §59 の key、同期先の Data Source ID。
+	keyDataSourceID = "data_source_id"
 
 	createSyncMetaSQL = `CREATE TABLE IF NOT EXISTS sync_meta (
     key TEXT PRIMARY KEY,
@@ -120,6 +122,54 @@ func (s *SQLiteStateStore) MarkInitialSyncCompleted(ctx context.Context, at time
 		value := at.UTC().Format(time.RFC3339)
 		if _, err := db.ExecContext(ctx, upsertMetaSQL, keyInitialSyncCompletedAt, value); err != nil {
 			return fmt.Errorf("write sync_meta.%s: %w", keyInitialSyncCompletedAt, err)
+		}
+		return nil
+	})
+}
+
+// DataSourceID は state.db が無ければ os.Stat だけで未記録を返し、ファイルを作らない。
+// state.db が開けない・読めないときは exitcode.LocalState（6）で包んだエラーを返す。
+func (s *SQLiteStateStore) DataSourceID(ctx context.Context) (id string, ok bool, err error) {
+	exists, err := s.stateFileExists()
+	if err != nil {
+		return "", false, err
+	}
+	if !exists {
+		return "", false, nil
+	}
+
+	err = s.withDB(func(db *sql.DB) error {
+		hasMeta, err := hasTable(ctx, db, "sync_meta")
+		if err != nil {
+			return err
+		}
+		if !hasMeta {
+			return nil
+		}
+		err = db.QueryRowContext(ctx, selectMetaSQL, keyDataSourceID).Scan(&id)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read sync_meta.%s: %w", keyDataSourceID, err)
+		}
+		ok = true
+		return nil
+	})
+	if err != nil {
+		return "", false, err
+	}
+	return id, ok, nil
+}
+
+// SaveDataSourceID は id を記録する。失敗は exitcode.LocalState（6）で包む。
+func (s *SQLiteStateStore) SaveDataSourceID(ctx context.Context, id string) error {
+	return s.withDB(func(db *sql.DB) error {
+		if _, err := db.ExecContext(ctx, createSyncMetaSQL); err != nil {
+			return fmt.Errorf("create sync_meta: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, upsertMetaSQL, keyDataSourceID, id); err != nil {
+			return fmt.Errorf("write sync_meta.%s: %w", keyDataSourceID, err)
 		}
 		return nil
 	})
