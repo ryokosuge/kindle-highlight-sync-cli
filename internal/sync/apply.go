@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"strings"
 	"time"
@@ -57,7 +58,45 @@ type ApplyResult struct {
 	Skipped []string      // 照合が ambiguous で skip した Book（§51）
 	Failed  []BookFailure // 書き込みが Book 単位で失敗した Book（§72）
 
-	Appended int // 追記できた Highlight の数。一部だけ成功した Book の成功分も数える
+	Appended int // 追記できた Highlight の数。一部だけ成功した Book の成功分と、結果不明のあと確かめ直しで Notion に在ると分かった分も数える
+
+	Rechecked int // 追記の結果が不明で、Notion の Highlight を取り直して確かめた Book の数
+	Resent    int // 確かめ直しで未反映と分かり、AppendHighlights に送り直した Highlight の数
+}
+
+const (
+	// maxRecheck は 1 冊の追記の結果が分からないときの、確かめ直しと再送の上限回数（§29）。
+	maxRecheck = 2
+	// recheckBaseBackoff は 1 回目の確かめ直しの前の待ち。以後は倍々にする。
+	recheckBaseBackoff = time.Second
+	// maxRecheckRetryAfter は Retry-After に従って待つ長さの上限。超えるときは待たずにその Book を失敗にする。
+	maxRecheckRetryAfter = 60 * time.Second
+)
+
+// recheckSleep と recheckJitter は確かめ直しの前の待ちで、テストで差し替える。
+var (
+	recheckSleep  = sleepContext
+	recheckJitter = func() time.Duration { return rand.N(time.Second) }
+)
+
+// recheckDelay は n 回目（1 始まり）の確かめ直しの前に待つ長さを返す。
+// 429 で Retry-After があればその長さ（上限を超えるなら ok = false）、無いときと 429 以外は 1 秒・2 秒に jitter を足した長さ。
+func recheckDelay(n int, err error) (d time.Duration, ok bool) {
+	if after, has := notion.RetryAfter(err); has {
+		return after, after <= maxRecheckRetryAfter
+	}
+	return recheckBaseBackoff<<(n-1) + recheckJitter(), true
+}
+
+func sleepContext(ctx context.Context, d time.Duration) error {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // PartialFailure は skip か失敗が 1 件以上あれば exitcode.PartialFailure（8）の error を返し、無ければ nil を返す（§72）。
@@ -100,6 +139,7 @@ func (e *booksNotSyncedError) Error() string {
 // 取得の順は dry-run（BuildPlan。既知 → Highlight）と違うが、既知を除く判定（unknownHighlights）は共有している。
 // 1 冊の書き込み・Highlight の取得・既知の取得が 400 / 429 / 5xx / タイムアウトで失敗してもその Book を Failed に残して残りを続ける（§72）。
 // タイムアウトで作成の結果が分からない Book は再送しない（§29。次の sync の照合で作成済みなら exact になる）。
+// 追記の結果が分からない失敗（notion.OutcomeUnknown）は、待ってから Notion の Highlight を取り直し、未反映の分だけを 2 回まで送り直す（appendWithRecheck）。
 // 書き込みが 401 / 403 / 404 で失敗したとき（§73）と FindBook が失敗したときは、その時点で残りを書かずに exitcode.Notion の error を返す。
 // 書き込みが context のキャンセルで失敗したときも残りを書かずに止め、元の error を包まずにそのまま返す。
 // どちらのときも ApplyResult には止まるまでの Book と追記できた件数が入っている。
@@ -199,9 +239,9 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 	unknown, backfill := Dedup(candidates, known)
 	var appended []destination.RemoteHighlight
 	var appendErr error
+	failKind := BookFailureAppend
 	if len(unknown) > 0 {
-		appended, appendErr = dst.AppendHighlights(ctx, remote, unknown)
-		r.Appended += len(appended)
+		appended, failKind, appendErr = r.appendWithRecheck(ctx, remote, unknown, dst)
 	}
 	// 追記が途中で失敗しても、成功した分は次の sync で重複して書かないよう先に保存する。
 	// 中断・タイムアウトでの失敗でも保存できるよう、キャンセルだけ切り離した context で保存し、元の追記の error は fail で仕分ける
@@ -211,9 +251,62 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 		}
 	}
 	if appendErr != nil {
-		return false, r.fail(book.ID, BookFailureAppend, appendErr)
+		return false, r.fail(book.ID, failKind, appendErr)
 	}
 	return true, nil
+}
+
+// appendWithRecheck は unknown を AppendHighlights に渡し、結果が分からない失敗（notion.OutcomeUnknown）のときは待ってから Notion の Highlight を取り直し、
+// 送ったのに成功に数えていない Highlight のうち Notion に在るものは成功分に足し、無いものだけを元の順のまま送り直す。確かめ直しと再送は maxRecheck 回まで。
+// 戻り値は成功に数えてよい分（AppendHighlights が返した分と、確かめ直しで Notion に在った分）と、失敗したときの種類・error。
+// 確かめ直しの取得の失敗は BookFailureListKnown、待ちを超える Retry-After・待ちの中断・確かめ直しを尽くした未反映は BookFailureAppend になる。
+func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.RemoteBook, unknown []domain.Highlight, dst destination.Destination) ([]destination.RemoteHighlight, BookFailureKind, error) {
+	confirmed, err := dst.AppendHighlights(ctx, remote, unknown)
+	r.Appended += len(confirmed)
+	pending := unknownHighlights(unknown, remoteByHighlightID(confirmed))
+	rechecked := false
+	for n := 1; err != nil && notion.OutcomeUnknown(err) && n <= maxRecheck; n++ {
+		d, ok := recheckDelay(n, err)
+		if !ok {
+			break
+		}
+		if serr := recheckSleep(ctx, d); serr != nil {
+			return confirmed, BookFailureAppend, serr
+		}
+		if !rechecked {
+			rechecked = true
+			r.Rechecked++
+		}
+		known, lerr := dst.ListHighlightIDs(ctx, remote)
+		if lerr != nil {
+			return confirmed, BookFailureListKnown, lerr
+		}
+		for _, h := range pending {
+			if rh, ok := known[h.ID]; ok {
+				confirmed = append(confirmed, rh)
+				r.Appended++
+			}
+		}
+		pending = unknownHighlights(pending, known)
+		if len(pending) == 0 {
+			return confirmed, BookFailureAppend, nil
+		}
+		r.Resent += len(pending)
+		var resent []destination.RemoteHighlight
+		resent, err = dst.AppendHighlights(ctx, remote, pending)
+		confirmed = append(confirmed, resent...)
+		r.Appended += len(resent)
+		pending = unknownHighlights(pending, remoteByHighlightID(resent))
+	}
+	return confirmed, BookFailureAppend, err
+}
+
+func remoteByHighlightID(rs []destination.RemoteHighlight) map[string]destination.RemoteHighlight {
+	m := make(map[string]destination.RemoteHighlight, len(rs))
+	for _, r := range rs {
+		m[r.HighlightID] = r
+	}
+	return m
 }
 
 // localStateError は State の失敗を exitcode.LocalState（6）の error にする。すでに LocalState ならそのまま返す。
