@@ -212,6 +212,12 @@ func TestWriteApplyResult(t *testing.T) {
 			wantCells: recheckCells(applyCells("0", "0", "3", "0", "0"), "2", "5"),
 		},
 		{
+			name:          "作成の結果が分からず照合し直した Book があれば、その数と作成済みとして使った数を足して出し、Book ID は出さない",
+			result:        syncengine.ApplyResult{Refound: []string{"B000000001", "B000000002"}, Recovered: []string{"B000000001"}},
+			wantCells:     createCells("0", "0", "2", "1", "0"),
+			wantNoBookIDs: true,
+		},
+		{
 			name:     "書き込み先が失敗したら error を返す",
 			writeErr: errors.New("boom"),
 		},
