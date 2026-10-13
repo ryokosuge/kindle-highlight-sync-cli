@@ -36,6 +36,7 @@ type recordedRequest struct {
 	method        string
 	path          string
 	authorization string
+	body          string
 }
 
 // newNotionServer は受けた要求を記録し、body をそのまま返す Notion の代役と、記録を返す関数を作る。
@@ -59,7 +60,7 @@ func newNotionServerHandler(t *testing.T, reply func(method, path string, body [
 		path := r.URL.EscapedPath()
 		body, _ := io.ReadAll(r.Body)
 		mu.Lock()
-		requests = append(requests, recordedRequest{method: r.Method, path: path, authorization: r.Header.Get("Authorization")})
+		requests = append(requests, recordedRequest{method: r.Method, path: path, authorization: r.Header.Get("Authorization"), body: string(body)})
 		out := reply(r.Method, path, body)
 		mu.Unlock()
 		_, _ = w.Write([]byte(out))
