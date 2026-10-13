@@ -39,6 +39,8 @@ type Summary struct {
 type Plan struct {
 	Books   []BookPlan
 	Summary Summary
+	// Failed は予定を組めなかった Book（ASIN が無い Book と、その Book だけの Highlight の取得の失敗）。Books と Summary には入らない。ambiguous は skip の行として Books に出るのでここには入れない。
+	Failed []FailedBook
 }
 
 // highlightLister は Source から Book の Highlight を取る。テストで差し替える。
@@ -48,10 +50,16 @@ type highlightLister interface {
 
 // BuildPlan は書き込まずに、各 Book の照合の結果と追記する Highlight の数を集める（仕様書 §63）。
 // Notion にページがある Book（exact / adoptable）は、Sync Marker で既知の Highlight ID を除いた数だけを数える（§26 の appendIDs = sourceIDs - knownIDs。
-// この Epic では State を読まないので knownIDs は remoteIDs だけ）。none はページが無く、ambiguous は Highlight を取らないので、どちらも Notion の block を読まない。
+// この Epic では State を読まないので knownIDs は remoteIDs だけ）。
+// ASIN の無い Book は照合せず FailureNoASIN として Failed に残し、Highlight の取得が ClassifyFetchError で Book 単位と判定される error で失敗した Book は種類付きで Failed に残して、残りの Book の予定を組み続ける。
+// それ以外の error（FindBook / ListHighlightIDs の失敗・枠の異常・ctx の取消・ブラウザ由来）はそのまま返して止まる。none はページが無く、ambiguous は Highlight を取らないので、どちらも Notion の block を読まない。
 func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, dst destination.Destination) (Plan, error) {
 	p := Plan{Books: make([]BookPlan, 0, len(books))}
 	for _, b := range books {
+		if b.ASIN == "" {
+			p.Failed = append(p.Failed, FailedBook{BookID: b.ID, Kind: FailureNoASIN})
+			continue
+		}
 		m, err := dst.FindBook(ctx, b)
 		if err != nil {
 			return Plan{}, err
@@ -62,17 +70,13 @@ func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, ds
 		case destination.BookMatchExact:
 			bp.Action = ActionAppend
 			hasPage = true
-			p.Summary.ExactMatches++
 		case destination.BookMatchAdoptable:
 			bp.Action = ActionAdoptAndAppend
 			hasPage = true
-			p.Summary.AdoptableMatches++
 		case destination.BookMatchNone:
 			bp.Action = ActionCreateAndAppend
-			p.Summary.NewBooks++
 		case destination.BookMatchAmbiguous:
 			bp.Action = ActionSkip
-			p.Summary.Ambiguous++
 		}
 		if bp.Action != ActionSkip {
 			var known map[string]destination.RemoteHighlight
@@ -83,10 +87,25 @@ func BuildPlan(ctx context.Context, books []domain.Book, src highlightLister, ds
 			}
 			hs, err := src.ListHighlights(ctx, b)
 			if err != nil {
-				return Plan{}, err
+				kind, ok := ClassifyFetchError(err)
+				if !ok {
+					return Plan{}, err
+				}
+				p.Failed = append(p.Failed, FailedBook{BookID: b.ID, Kind: kind})
+				continue
 			}
 			bp.HighlightsToAppend = countUnknown(hs, known)
 			p.Summary.HighlightsToAppend += bp.HighlightsToAppend
+		}
+		switch m.Status {
+		case destination.BookMatchExact:
+			p.Summary.ExactMatches++
+		case destination.BookMatchAdoptable:
+			p.Summary.AdoptableMatches++
+		case destination.BookMatchNone:
+			p.Summary.NewBooks++
+		case destination.BookMatchAmbiguous:
+			p.Summary.Ambiguous++
 		}
 		p.Books = append(p.Books, bp)
 	}

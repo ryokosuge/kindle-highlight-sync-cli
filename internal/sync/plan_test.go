@@ -11,6 +11,7 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/destination"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
 
 type fakeDestination struct {
@@ -159,7 +160,7 @@ func TestBuildPlan(t *testing.T) {
 	}{
 		{
 			name:  "exact の Book は append でページ ID と件数が入る",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 			},
@@ -168,7 +169,7 @@ func TestBuildPlan(t *testing.T) {
 			},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:               domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:              destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 					Action:             ActionAppend,
 					HighlightsToAppend: 2,
@@ -180,7 +181,7 @@ func TestBuildPlan(t *testing.T) {
 		},
 		{
 			name:  "adoptable の Book は adopt + append でページが入る",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "page-9"}},
 			},
@@ -189,7 +190,7 @@ func TestBuildPlan(t *testing.T) {
 			},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:               domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:              destination.BookMatch{Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "page-9"}},
 					Action:             ActionAdoptAndAppend,
 					HighlightsToAppend: 1,
@@ -201,7 +202,7 @@ func TestBuildPlan(t *testing.T) {
 		},
 		{
 			name:  "none の Book は create + append でページは空のまま",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchNone},
 			},
@@ -210,7 +211,7 @@ func TestBuildPlan(t *testing.T) {
 			},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:               domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:              destination.BookMatch{Status: destination.BookMatchNone},
 					Action:             ActionCreateAndAppend,
 					HighlightsToAppend: 3,
@@ -222,7 +223,7 @@ func TestBuildPlan(t *testing.T) {
 		},
 		{
 			name:  "ambiguous の Book は skip で Highlight を取りに行かない",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchAmbiguous},
 			},
@@ -231,7 +232,7 @@ func TestBuildPlan(t *testing.T) {
 			},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:   domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:   domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:  destination.BookMatch{Status: destination.BookMatchAmbiguous},
 					Action: ActionSkip,
 				}},
@@ -242,7 +243,7 @@ func TestBuildPlan(t *testing.T) {
 		},
 		{
 			name:  "Note だけの Highlight も 1 件と数える",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 			},
@@ -251,7 +252,7 @@ func TestBuildPlan(t *testing.T) {
 			},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:               domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:              destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 					Action:             ActionAppend,
 					HighlightsToAppend: 1,
@@ -263,7 +264,7 @@ func TestBuildPlan(t *testing.T) {
 		},
 		{
 			name:  "exact の Book は Sync Marker で既知の Highlight を Append から除く",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 			},
@@ -273,7 +274,7 @@ func TestBuildPlan(t *testing.T) {
 			remoteIDs: map[string][]string{"page-1": {"a-2"}},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:               domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:              destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 					Action:             ActionAppend,
 					HighlightsToAppend: 2,
@@ -285,7 +286,7 @@ func TestBuildPlan(t *testing.T) {
 		},
 		{
 			name:  "adoptable の Book も Sync Marker で既知の Highlight を Append から除く",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "page-9"}},
 			},
@@ -295,7 +296,7 @@ func TestBuildPlan(t *testing.T) {
 			remoteIDs: map[string][]string{"page-9": {"a-1", "a-2"}},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:               domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:              destination.BookMatch{Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "page-9"}},
 					Action:             ActionAdoptAndAppend,
 					HighlightsToAppend: 0,
@@ -307,7 +308,7 @@ func TestBuildPlan(t *testing.T) {
 		},
 		{
 			name:  "Notion にだけある Highlight ID は Append の数を負にせず数に影響しない",
-			books: []domain.Book{{ID: "book-1", Title: "Go 本"}},
+			books: []domain.Book{{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"}},
 			matches: map[string]destination.BookMatch{
 				"book-1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 			},
@@ -317,7 +318,7 @@ func TestBuildPlan(t *testing.T) {
 			remoteIDs: map[string][]string{"page-1": {"a-1", "a-8", "a-9"}},
 			want: Plan{
 				Books: []BookPlan{{
-					Book:               domain.Book{ID: "book-1", Title: "Go 本"},
+					Book:               domain.Book{ID: "book-1", Title: "Go 本", ASIN: "ASIN-book-1"},
 					Match:              destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-1"}},
 					Action:             ActionAppend,
 					HighlightsToAppend: 0,
@@ -330,12 +331,12 @@ func TestBuildPlan(t *testing.T) {
 		{
 			name: "複数 Book の summary は各予定の合計",
 			books: []domain.Book{
-				{ID: "b1"},
-				{ID: "b2"},
-				{ID: "b3"},
-				{ID: "b4"},
-				{ID: "b5"},
-				{ID: "b6"},
+				{ID: "b1", ASIN: "ASIN-b1"},
+				{ID: "b2", ASIN: "ASIN-b2"},
+				{ID: "b3", ASIN: "ASIN-b3"},
+				{ID: "b4", ASIN: "ASIN-b4"},
+				{ID: "b5", ASIN: "ASIN-b5"},
+				{ID: "b6", ASIN: "ASIN-b6"},
 			},
 			matches: map[string]destination.BookMatch{
 				"b1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p1"}},
@@ -355,12 +356,12 @@ func TestBuildPlan(t *testing.T) {
 			remoteIDs: map[string][]string{"p2": {"a-3"}},
 			want: Plan{
 				Books: []BookPlan{
-					{Book: domain.Book{ID: "b1"}, Match: destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p1"}}, Action: ActionAppend, HighlightsToAppend: 1},
-					{Book: domain.Book{ID: "b2"}, Match: destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p2"}}, Action: ActionAppend, HighlightsToAppend: 1},
-					{Book: domain.Book{ID: "b3"}, Match: destination.BookMatch{Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "p3"}}, Action: ActionAdoptAndAppend, HighlightsToAppend: 1},
-					{Book: domain.Book{ID: "b4"}, Match: destination.BookMatch{Status: destination.BookMatchNone}, Action: ActionCreateAndAppend},
-					{Book: domain.Book{ID: "b5"}, Match: destination.BookMatch{Status: destination.BookMatchAmbiguous}, Action: ActionSkip},
-					{Book: domain.Book{ID: "b6"}, Match: destination.BookMatch{Status: destination.BookMatchAmbiguous}, Action: ActionSkip},
+					{Book: domain.Book{ID: "b1", ASIN: "ASIN-b1"}, Match: destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p1"}}, Action: ActionAppend, HighlightsToAppend: 1},
+					{Book: domain.Book{ID: "b2", ASIN: "ASIN-b2"}, Match: destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p2"}}, Action: ActionAppend, HighlightsToAppend: 1},
+					{Book: domain.Book{ID: "b3", ASIN: "ASIN-b3"}, Match: destination.BookMatch{Status: destination.BookMatchAdoptable, Book: &destination.RemoteBook{ID: "p3"}}, Action: ActionAdoptAndAppend, HighlightsToAppend: 1},
+					{Book: domain.Book{ID: "b4", ASIN: "ASIN-b4"}, Match: destination.BookMatch{Status: destination.BookMatchNone}, Action: ActionCreateAndAppend},
+					{Book: domain.Book{ID: "b5", ASIN: "ASIN-b5"}, Match: destination.BookMatch{Status: destination.BookMatchAmbiguous}, Action: ActionSkip},
+					{Book: domain.Book{ID: "b6", ASIN: "ASIN-b6"}, Match: destination.BookMatch{Status: destination.BookMatchAmbiguous}, Action: ActionSkip},
 				},
 				Summary: Summary{
 					ExactMatches:       2,
@@ -404,10 +405,13 @@ func TestBuildPlan(t *testing.T) {
 }
 
 func TestBuildPlanError(t *testing.T) {
-	wantErr := exitcode.New(exitcode.Notion, errors.New("notion: query failed"))
+	notionErr := exitcode.New(exitcode.Notion, errors.New("notion: query failed"))
+	localStateErr := exitcode.New(exitcode.LocalState, errors.New("destination: highlight ID scheme mismatch"))
 
 	tests := []struct {
 		name          string
+		wantErr       error
+		wantCode      int
 		dstErrs       map[string]error
 		idsErrs       map[string]error
 		srcErrs       map[string]error
@@ -417,21 +421,36 @@ func TestBuildPlanError(t *testing.T) {
 	}{
 		{
 			name:          "FindBook が 2 冊目で失敗したら 3 冊目には行かない",
-			dstErrs:       map[string]error{"b2": wantErr},
+			wantErr:       notionErr,
+			wantCode:      4,
+			dstErrs:       map[string]error{"b2": notionErr},
 			wantFindCalls: []string{"b1", "b2"},
 			wantIDsCalls:  []string{"p1"},
 			wantListCalls: []string{"b1"},
 		},
 		{
 			name:          "ListHighlightIDs が 2 冊目で失敗したら その Book の Highlight は取らず 3 冊目には行かない",
-			idsErrs:       map[string]error{"p2": wantErr},
+			wantErr:       notionErr,
+			wantCode:      4,
+			idsErrs:       map[string]error{"p2": notionErr},
+			wantFindCalls: []string{"b1", "b2"},
+			wantIDsCalls:  []string{"p1", "p2"},
+			wantListCalls: []string{"b1"},
+		},
+		{
+			name:          "ListHighlightIDs が LocalState の error なら Failed に残さずその error で 3 冊目には行かない",
+			wantErr:       localStateErr,
+			wantCode:      6,
+			idsErrs:       map[string]error{"p2": localStateErr},
 			wantFindCalls: []string{"b1", "b2"},
 			wantIDsCalls:  []string{"p1", "p2"},
 			wantListCalls: []string{"b1"},
 		},
 		{
 			name:          "ListHighlights が 2 冊目で失敗したら 3 冊目には行かない",
-			srcErrs:       map[string]error{"b2": wantErr},
+			wantErr:       notionErr,
+			wantCode:      4,
+			srcErrs:       map[string]error{"b2": notionErr},
 			wantFindCalls: []string{"b1", "b2"},
 			wantIDsCalls:  []string{"p1", "p2"},
 			wantListCalls: []string{"b1", "b2"},
@@ -440,7 +459,7 @@ func TestBuildPlanError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			books := []domain.Book{{ID: "b1"}, {ID: "b2"}, {ID: "b3"}}
+			books := []domain.Book{{ID: "b1", ASIN: "ASIN-b1"}, {ID: "b2", ASIN: "ASIN-b2"}, {ID: "b3", ASIN: "ASIN-b3"}}
 			dst := &fakeDestination{
 				matches: map[string]destination.BookMatch{
 					"b1": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "p1"}},
@@ -459,11 +478,11 @@ func TestBuildPlanError(t *testing.T) {
 				errs: tt.srcErrs,
 			}
 			got, err := BuildPlan(context.Background(), books, src, dst)
-			if err != wantErr {
-				t.Errorf("BuildPlan() error = %v, want %v", err, wantErr)
+			if err != tt.wantErr {
+				t.Errorf("BuildPlan() error = %v, want %v", err, tt.wantErr)
 			}
-			if exitcode.Code(err) != 4 {
-				t.Errorf("exitcode.Code(err) = %d, want 4", exitcode.Code(err))
+			if exitcode.Code(err) != tt.wantCode {
+				t.Errorf("exitcode.Code(err) = %d, want %d", exitcode.Code(err), tt.wantCode)
 			}
 			if !reflect.DeepEqual(got, Plan{}) {
 				t.Errorf("BuildPlan() = %+v, want %+v", got, Plan{})
@@ -476,6 +495,150 @@ func TestBuildPlanError(t *testing.T) {
 			}
 			if !slices.Equal(src.calls, tt.wantListCalls) {
 				t.Errorf("ListHighlights calls = %v, want %v", src.calls, tt.wantListCalls)
+			}
+		})
+	}
+}
+
+func TestBuildPlanBookFailures(t *testing.T) {
+	exact := func(book, page string) destination.BookMatch {
+		return destination.BookMatch{Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: page}}
+	}
+
+	tests := []struct {
+		name          string
+		books         []domain.Book
+		srcErrs       map[string]error
+		want          Plan
+		wantFindCalls []string
+		wantIDsCalls  []string
+		wantListCalls []string
+	}{
+		{
+			name:  "ASIN の無い Book は照合も取得もせず失敗に残り予定と summary に入らない",
+			books: []domain.Book{{ID: "b1", ASIN: "ASIN-b1"}, {ID: "b-noasin"}, {ID: "b3", ASIN: "ASIN-b3"}},
+			want: Plan{
+				Books: []BookPlan{
+					{Book: domain.Book{ID: "b1", ASIN: "ASIN-b1"}, Match: exact("b1", "p1"), Action: ActionAppend, HighlightsToAppend: 1},
+					{Book: domain.Book{ID: "b3", ASIN: "ASIN-b3"}, Match: exact("b3", "p3"), Action: ActionAppend, HighlightsToAppend: 1},
+				},
+				Summary: Summary{ExactMatches: 2, HighlightsToAppend: 2},
+				Failed:  []FailedBook{{BookID: "b-noasin", Kind: FailureNoASIN}},
+			},
+			wantFindCalls: []string{"b1", "b3"},
+			wantIDsCalls:  []string{"p1", "p3"},
+			wantListCalls: []string{"b1", "b3"},
+		},
+		{
+			name:    "2 冊目の構造の異常は失敗に残り 3 冊目の予定が組まれる",
+			books:   []domain.Book{{ID: "b1", ASIN: "ASIN-b1"}, {ID: "b2", ASIN: "ASIN-b2"}, {ID: "b3", ASIN: "ASIN-b3"}},
+			srcErrs: map[string]error{"b2": fmt.Errorf("source: %w", source.ErrSourceFormat)},
+			want: Plan{
+				Books: []BookPlan{
+					{Book: domain.Book{ID: "b1", ASIN: "ASIN-b1"}, Match: exact("b1", "p1"), Action: ActionAppend, HighlightsToAppend: 1},
+					{Book: domain.Book{ID: "b3", ASIN: "ASIN-b3"}, Match: exact("b3", "p3"), Action: ActionAppend, HighlightsToAppend: 1},
+				},
+				Summary: Summary{ExactMatches: 2, HighlightsToAppend: 2},
+				Failed:  []FailedBook{{BookID: "b2", Kind: FailureNotebookStructure}},
+			},
+			wantFindCalls: []string{"b1", "b2", "b3"},
+			wantIDsCalls:  []string{"p1", "p2", "p3"},
+			wantListCalls: []string{"b1", "b2", "b3"},
+		},
+		{
+			name:    "2 冊目の Highlight ID が作れない error は失敗に残り 3 冊目の予定が組まれる",
+			books:   []domain.Book{{ID: "b1", ASIN: "ASIN-b1"}, {ID: "b2", ASIN: "ASIN-b2"}, {ID: "b3", ASIN: "ASIN-b3"}},
+			srcErrs: map[string]error{"b2": fmt.Errorf("source: %w: %w", domain.ErrMissingAnnotationID, source.ErrSourceFormat)},
+			want: Plan{
+				Books: []BookPlan{
+					{Book: domain.Book{ID: "b1", ASIN: "ASIN-b1"}, Match: exact("b1", "p1"), Action: ActionAppend, HighlightsToAppend: 1},
+					{Book: domain.Book{ID: "b3", ASIN: "ASIN-b3"}, Match: exact("b3", "p3"), Action: ActionAppend, HighlightsToAppend: 1},
+				},
+				Summary: Summary{ExactMatches: 2, HighlightsToAppend: 2},
+				Failed:  []FailedBook{{BookID: "b2", Kind: FailureHighlightID}},
+			},
+			wantFindCalls: []string{"b1", "b2", "b3"},
+			wantIDsCalls:  []string{"p1", "p2", "p3"},
+			wantListCalls: []string{"b1", "b2", "b3"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dst := &fakeDestination{matches: map[string]destination.BookMatch{
+				"b1": exact("b1", "p1"),
+				"b2": exact("b2", "p2"),
+				"b3": exact("b3", "p3"),
+			}}
+			src := &fakeSource{
+				highlights: map[string][]domain.Highlight{
+					"b1": highlights("a-1"),
+					"b2": highlights("a-2"),
+					"b3": highlights("a-3"),
+				},
+				errs: tt.srcErrs,
+			}
+			got, err := BuildPlan(context.Background(), tt.books, src, dst)
+			if err != nil {
+				t.Fatalf("BuildPlan() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("BuildPlan() = %+v, want %+v", got, tt.want)
+			}
+			if !slices.Equal(dst.calls, tt.wantFindCalls) {
+				t.Errorf("FindBook calls = %v, want %v", dst.calls, tt.wantFindCalls)
+			}
+			if !slices.Equal(dst.listCalls, tt.wantIDsCalls) {
+				t.Errorf("ListHighlightIDs calls = %v, want %v", dst.listCalls, tt.wantIDsCalls)
+			}
+			if !slices.Equal(src.calls, tt.wantListCalls) {
+				t.Errorf("ListHighlights calls = %v, want %v", src.calls, tt.wantListCalls)
+			}
+		})
+	}
+}
+
+func TestBuildPlanFetchStops(t *testing.T) {
+	tests := []struct {
+		name   string
+		srcErr error
+	}{
+		{
+			name:   "枠の異常は止まる",
+			srcErr: fmt.Errorf("source: %w: %w", source.ErrHighlightsFrame, source.ErrSourceFormat),
+		},
+		{
+			name:   "ctx の取消は止まる",
+			srcErr: fmt.Errorf("source: %w", context.Canceled),
+		},
+		{
+			name:   "期限切れは止まる",
+			srcErr: fmt.Errorf("source: %w", context.DeadlineExceeded),
+		},
+		{
+			name:   "ブラウザ由来の失敗は止まる",
+			srcErr: exitcode.New(exitcode.Browser, errors.New("browser: crashed")),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			books := []domain.Book{{ID: "b1", ASIN: "ASIN-b1"}, {ID: "b2", ASIN: "ASIN-b2"}, {ID: "b3", ASIN: "ASIN-b3"}}
+			dst := &fakeDestination{matches: map[string]destination.BookMatch{
+				"b1": {Status: destination.BookMatchNone},
+				"b2": {Status: destination.BookMatchNone},
+				"b3": {Status: destination.BookMatchNone},
+			}}
+			src := &fakeSource{errs: map[string]error{"b2": tt.srcErr}}
+			got, err := BuildPlan(context.Background(), books, src, dst)
+			if err != tt.srcErr {
+				t.Errorf("BuildPlan() error = %v, want %v", err, tt.srcErr)
+			}
+			if !reflect.DeepEqual(got, Plan{}) {
+				t.Errorf("BuildPlan() = %+v, want %+v", got, Plan{})
+			}
+			if want := []string{"b1", "b2"}; !slices.Equal(src.calls, want) {
+				t.Errorf("ListHighlights calls = %v, want %v", src.calls, want)
 			}
 		})
 	}
