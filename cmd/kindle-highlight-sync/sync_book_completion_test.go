@@ -55,7 +55,7 @@ func TestSyncBookCompletion(t *testing.T) {
 	}
 	allBooks := dedupBookIDs
 	okBooks := []string{dryRunBookExact.ID, initialBookAdopt.ID}
-	failStderr := "partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (append failed)\n"
+	failStderr := "partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (notion write failed)\n"
 	allAppends := []string{"PATCH " + testDryRunBlocksPath, "PATCH " + testCreatedBlocksPath, "PATCH " + testInitialAdoptBlocksPath}
 	tests := []struct {
 		name string

@@ -185,7 +185,7 @@ func TestWriteApplyResult(t *testing.T) {
 			Exact:    []string{"B000000004"},
 			Skipped:  []string{"B000000005"},
 			Appended: 7,
-			Failed:   []syncengine.BookFailure{{BookID: "B000000006", Kind: syncengine.BookFailureCreate}, {BookID: "B000000007", Kind: syncengine.BookFailureAdopt}},
+			Failed:   []syncengine.FailedBook{{BookID: "B000000006", Kind: syncengine.FailureNotionWrite}, {BookID: "B000000007", Kind: syncengine.FailureNotionWrite}},
 		}
 		var buf bytes.Buffer
 		if err := writeApplyResult(&buf, r); err != nil {

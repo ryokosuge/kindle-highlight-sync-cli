@@ -84,10 +84,10 @@ func stateRow(bookID, highlightID, blockID string) state.HighlightState {
 
 // applyBooks は照合の結果が none / adoptable / exact / ambiguous の順に並ぶ 4 冊。タイトルは文言に出ないことを確かめるために入れる。
 var applyBooks = []domain.Book{
-	{ID: "book-new", Title: "New Book"},
-	{ID: "book-adopt", Title: "Adopt Book"},
-	{ID: "book-exact", Title: "Exact Book"},
-	{ID: "book-ambiguous", Title: "Ambiguous Book"},
+	{ID: "book-new", ASIN: "ASIN-new", Title: "New Book"},
+	{ID: "book-adopt", ASIN: "ASIN-adopt", Title: "Adopt Book"},
+	{ID: "book-exact", ASIN: "ASIN-exact", Title: "Exact Book"},
+	{ID: "book-ambiguous", ASIN: "ASIN-ambiguous", Title: "Ambiguous Book"},
 }
 
 var applyMatches = map[string]destination.BookMatch{
@@ -140,6 +140,16 @@ func TestApplyBooks(t *testing.T) {
 			want:    ApplyResult{},
 		},
 		{
+			name:    "ASIN の無い Book は照合も書き込みもせず ASIN が無い失敗に数え、残りの Book は同期する",
+			books:   []domain.Book{{ID: "book-no-asin", Title: "No ASIN"}, applyBooks[0]},
+			matches: applyMatches,
+			want: ApplyResult{
+				Created: []string{"book-new"},
+				Failed:  []FailedBook{{BookID: "book-no-asin", Kind: FailureNoASIN}},
+			},
+			wantWrites: []string{"create book-new"},
+		},
+		{
 			name:      "CreateBook が 400 で失敗しても残りの Book を続け、失敗した Book ID が残る",
 			books:     applyBooks,
 			matches:   applyMatches,
@@ -148,7 +158,7 @@ func TestApplyBooks(t *testing.T) {
 				Adopted: []string{"book-adopt"},
 				Exact:   []string{"book-exact"},
 				Skipped: []string{"book-ambiguous"},
-				Failed:  []BookFailure{{BookID: "book-new", Kind: BookFailureCreate}},
+				Failed:  []FailedBook{{BookID: "book-new", Kind: FailureNotionWrite}},
 			},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
@@ -161,7 +171,7 @@ func TestApplyBooks(t *testing.T) {
 				Created: []string{"book-new"},
 				Exact:   []string{"book-exact"},
 				Skipped: []string{"book-ambiguous"},
-				Failed:  []BookFailure{{BookID: "book-adopt", Kind: BookFailureAdopt}},
+				Failed:  []FailedBook{{BookID: "book-adopt", Kind: FailureNotionWrite}},
 			},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
@@ -174,7 +184,7 @@ func TestApplyBooks(t *testing.T) {
 				Adopted: []string{"book-adopt"},
 				Exact:   []string{"book-exact"},
 				Skipped: []string{"book-ambiguous"},
-				Failed:  []BookFailure{{BookID: "book-new", Kind: BookFailureCreate}},
+				Failed:  []FailedBook{{BookID: "book-new", Kind: FailureNotionWrite}},
 			},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
@@ -197,7 +207,7 @@ func TestApplyBooks(t *testing.T) {
 			want:       ApplyResult{},
 			wantWrites: []string{"create book-new"},
 			wantCode:   4,
-			wantErr:    "sync: create failed book-new: HTTP 401 Unauthorized",
+			wantErr:    "sync: notion write failed book-new: HTTP 401 Unauthorized",
 		},
 		{
 			name:       "AdoptBook が 403 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
@@ -207,7 +217,7 @@ func TestApplyBooks(t *testing.T) {
 			want:       ApplyResult{Created: []string{"book-new"}},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
 			wantCode:   4,
-			wantErr:    "sync: adopt failed book-adopt: HTTP 403 Forbidden",
+			wantErr:    "sync: notion write failed book-adopt: HTTP 403 Forbidden",
 		},
 		{
 			name:       "AdoptBook が 404 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
@@ -217,7 +227,7 @@ func TestApplyBooks(t *testing.T) {
 			want:       ApplyResult{Created: []string{"book-new"}},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt"},
 			wantCode:   4,
-			wantErr:    "sync: adopt failed book-adopt: HTTP 404 Not Found",
+			wantErr:    "sync: notion write failed book-adopt: HTTP 404 Not Found",
 		},
 		{
 			name:      "UpdateBook が 400 で失敗しても残りの Book を続け、失敗した Book ID が残り、exact には数えない",
@@ -228,7 +238,7 @@ func TestApplyBooks(t *testing.T) {
 				Created: []string{"book-new"},
 				Adopted: []string{"book-adopt"},
 				Skipped: []string{"book-ambiguous"},
-				Failed:  []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+				Failed:  []FailedBook{{BookID: "book-exact", Kind: FailureNotionWrite}},
 			},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
@@ -241,7 +251,7 @@ func TestApplyBooks(t *testing.T) {
 				Created: []string{"book-new"},
 				Adopted: []string{"book-adopt"},
 				Skipped: []string{"book-ambiguous"},
-				Failed:  []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+				Failed:  []FailedBook{{BookID: "book-exact", Kind: FailureNotionWrite}},
 			},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
@@ -254,7 +264,7 @@ func TestApplyBooks(t *testing.T) {
 				Created: []string{"book-new"},
 				Adopted: []string{"book-adopt"},
 				Skipped: []string{"book-ambiguous"},
-				Failed:  []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+				Failed:  []FailedBook{{BookID: "book-exact", Kind: FailureNotionWrite}},
 			},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 		},
@@ -266,7 +276,7 @@ func TestApplyBooks(t *testing.T) {
 			want:       ApplyResult{Created: []string{"book-new"}, Adopted: []string{"book-adopt"}},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 			wantCode:   4,
-			wantErr:    "sync: update failed book-exact: HTTP 401 Unauthorized",
+			wantErr:    "sync: notion write failed book-exact: HTTP 401 Unauthorized",
 		},
 		{
 			name:       "UpdateBook が 403 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
@@ -276,7 +286,7 @@ func TestApplyBooks(t *testing.T) {
 			want:       ApplyResult{Created: []string{"book-new"}, Adopted: []string{"book-adopt"}},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 			wantCode:   4,
-			wantErr:    "sync: update failed book-exact: HTTP 403 Forbidden",
+			wantErr:    "sync: notion write failed book-exact: HTTP 403 Forbidden",
 		},
 		{
 			name:       "UpdateBook が 404 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
@@ -286,7 +296,7 @@ func TestApplyBooks(t *testing.T) {
 			want:       ApplyResult{Created: []string{"book-new"}, Adopted: []string{"book-adopt"}},
 			wantWrites: []string{"create book-new", "adopt page-adopt book-adopt", "update page-exact book-exact"},
 			wantCode:   4,
-			wantErr:    "sync: update failed book-exact: HTTP 404 Not Found",
+			wantErr:    "sync: notion write failed book-exact: HTTP 404 Not Found",
 		},
 		{
 			name:       "FindBook が失敗したらその時点で exitcode.Notion の error を返す",
@@ -327,6 +337,8 @@ var (
 	bookFormatError      = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: highlight row: %w", source.ErrSourceFormat))
 	highlightsFrameError = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: highlights page: %w: %w", source.ErrHighlightsFrame, source.ErrSourceFormat))
 	browserError         = exitcode.New(exitcode.Browser, errors.New("browser: page crashed"))
+	highlightIDError     = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: row 1: %w: %w", domain.ErrMissingAnnotationID, source.ErrSourceFormat))
+	wrappedDeadlineError = exitcode.New(exitcode.Browser, fmt.Errorf("source: highlights page: %w", context.DeadlineExceeded))
 )
 
 func applyHighlights(ids ...string) []domain.Highlight {
@@ -388,7 +400,7 @@ func TestApplyBooksAppend(t *testing.T) {
 				Created:  []string{"book-new"},
 				Adopted:  []string{"book-adopt"},
 				Skipped:  []string{"book-ambiguous"},
-				Failed:   []BookFailure{{BookID: "book-exact", Kind: BookFailureUpdate}},
+				Failed:   []FailedBook{{BookID: "book-exact", Kind: FailureNotionWrite}},
 				Appended: 6,
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
@@ -416,7 +428,7 @@ func TestApplyBooksAppend(t *testing.T) {
 				Adopted:  []string{"book-adopt"},
 				Exact:    []string{"book-exact"},
 				Skipped:  []string{"book-ambiguous"},
-				Failed:   []BookFailure{{BookID: "book-adopt", Kind: BookFailureAppend}},
+				Failed:   []FailedBook{{BookID: "book-adopt", Kind: FailureNotionWrite}},
 				Appended: 3 + 1 + 3,
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}, "page-exact": {"a-1", "a-2", "a-3"}},
@@ -430,7 +442,7 @@ func TestApplyBooksAppend(t *testing.T) {
 				Adopted:  []string{"book-adopt"},
 				Exact:    []string{"book-exact"},
 				Skipped:  []string{"book-ambiguous"},
-				Failed:   []BookFailure{{BookID: "book-new", Kind: BookFailureAppend}},
+				Failed:   []FailedBook{{BookID: "book-new", Kind: FailureNotionWrite}},
 				Appended: 6,
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}, "page-exact": {"a-1", "a-2", "a-3"}},
@@ -444,7 +456,7 @@ func TestApplyBooksAppend(t *testing.T) {
 				Adopted:  []string{"book-adopt"},
 				Exact:    []string{"book-exact"},
 				Skipped:  []string{"book-ambiguous"},
-				Failed:   []BookFailure{{BookID: "book-adopt", Kind: BookFailureListKnown}},
+				Failed:   []FailedBook{{BookID: "book-adopt", Kind: FailureNotionWrite}},
 				Appended: 6,
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-exact": {"a-1", "a-2", "a-3"}},
@@ -458,39 +470,51 @@ func TestApplyBooksAppend(t *testing.T) {
 				Adopted:  []string{"book-adopt"},
 				Exact:    []string{"book-exact"},
 				Skipped:  []string{"book-ambiguous"},
-				Failed:   []BookFailure{{BookID: "book-exact", Kind: BookFailureFetch}},
+				Failed:   []FailedBook{{BookID: "book-exact", Kind: FailureNotebookStructure}},
 				Appended: 6,
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
 			wantListCalls: []string{"page-adopt"},
 		},
 		{
-			name:    "Highlight の取得がタイムアウトしたら残りの Book を続け、その Book ID が失敗に残る",
+			name:    "Highlight の取得が Highlight ID を作れず失敗したら残りの Book を続け、その Book には追記しない",
+			srcErrs: map[string]error{"book-exact": highlightIDError},
+			want: ApplyResult{
+				Created:  []string{"book-new"},
+				Adopted:  []string{"book-adopt"},
+				Exact:    []string{"book-exact"},
+				Skipped:  []string{"book-ambiguous"},
+				Failed:   []FailedBook{{BookID: "book-exact", Kind: FailureHighlightID}},
+				Appended: 6,
+			},
+			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
+			wantListCalls: []string{"page-adopt"},
+		},
+		{
+			name:    "Highlight の取得がタイムアウトしたら種類を保って残りの Book を書かずに止める",
 			srcErrs: map[string]error{"book-exact": context.DeadlineExceeded},
 			want: ApplyResult{
 				Created:  []string{"book-new"},
 				Adopted:  []string{"book-adopt"},
 				Exact:    []string{"book-exact"},
-				Skipped:  []string{"book-ambiguous"},
-				Failed:   []BookFailure{{BookID: "book-exact", Kind: BookFailureFetch}},
 				Appended: 6,
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
 			wantListCalls: []string{"page-adopt"},
+			wantCode:      1,
+			wantErr:       context.DeadlineExceeded.Error(),
 		},
 		{
-			name:    "包まれたタイムアウトで Highlight の取得が失敗しても残りの Book を続ける",
-			srcErrs: map[string]error{"book-adopt": exitcode.New(exitcode.Browser, fmt.Errorf("source: highlights page: %w", context.DeadlineExceeded))},
+			name:    "包まれたタイムアウトで Highlight の取得が失敗しても種類を保って残りの Book を書かずに止める",
+			srcErrs: map[string]error{"book-adopt": wrappedDeadlineError},
 			want: ApplyResult{
 				Created:  []string{"book-new"},
 				Adopted:  []string{"book-adopt"},
-				Exact:    []string{"book-exact"},
-				Skipped:  []string{"book-ambiguous"},
-				Failed:   []BookFailure{{BookID: "book-adopt", Kind: BookFailureFetch}},
-				Appended: 6,
+				Appended: 3,
 			},
-			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-exact": {"a-1", "a-2", "a-3"}},
-			wantListCalls: []string{"page-exact"},
+			wantAppends: map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}},
+			wantCode:    5,
+			wantErr:     wrappedDeadlineError.Error(),
 		},
 		{
 			name:    "ブラウザの失敗で Highlight が取れなければ種類を保って残りの Book を書かずに止める",
@@ -537,7 +561,7 @@ func TestApplyBooksAppend(t *testing.T) {
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
 			wantListCalls: []string{"page-adopt"},
 			wantCode:      4,
-			wantErr:       "sync: append failed book-adopt: HTTP 401 Unauthorized",
+			wantErr:       "sync: notion write failed book-adopt: HTTP 401 Unauthorized",
 		},
 		{
 			name:       "追記が 403 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
@@ -547,7 +571,7 @@ func TestApplyBooksAppend(t *testing.T) {
 			},
 			wantAppends: map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}},
 			wantCode:    4,
-			wantErr:     "sync: append failed book-new: HTTP 403 Forbidden",
+			wantErr:     "sync: notion write failed book-new: HTTP 403 Forbidden",
 		},
 		{
 			name:       "追記が 404 で失敗したら残りの Book を書かずに exitcode.Notion の error を返す",
@@ -561,7 +585,7 @@ func TestApplyBooksAppend(t *testing.T) {
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}, "page-exact": {"a-1", "a-2", "a-3"}},
 			wantListCalls: []string{"page-adopt", "page-exact"},
 			wantCode:      4,
-			wantErr:       "sync: append failed book-exact: HTTP 404 Not Found",
+			wantErr:       "sync: notion write failed book-exact: HTTP 404 Not Found",
 		},
 	}
 	for _, tt := range tests {
@@ -617,21 +641,29 @@ func TestApplyResultPartialFailure(t *testing.T) {
 		},
 		{
 			name: "失敗があれば partial failure で Book ID と種類だけを並べる",
-			result: ApplyResult{Failed: []BookFailure{
-				{BookID: "book-new", Kind: BookFailureCreate},
-				{BookID: "book-adopt", Kind: BookFailureAdopt},
+			result: ApplyResult{Failed: []FailedBook{
+				{BookID: "book-new", Kind: FailureNotionWrite},
+				{BookID: "book-adopt", Kind: FailureNotionWrite},
 			}},
 			wantCode: 8,
-			wantErr:  "sync: 2 books were not synced: book-new (create failed); book-adopt (adopt failed)",
+			wantErr:  "sync: 2 books were not synced: book-new (notion write failed); book-adopt (notion write failed)",
 		},
 		{
 			name: "skip と失敗の両方があれば skip を先に並べる",
 			result: ApplyResult{
 				Skipped: []string{"book-ambiguous"},
-				Failed:  []BookFailure{{BookID: "book-new", Kind: BookFailureCreate}},
+				Failed:  []FailedBook{{BookID: "book-new", Kind: FailureNotionWrite}},
 			},
 			wantCode: 8,
-			wantErr:  "sync: 2 books were not synced: book-ambiguous (ambiguous); book-new (create failed)",
+			wantErr:  "sync: 2 books were not synced: book-ambiguous (ambiguous); book-new (notion write failed)",
+		},
+		{
+			name: "Book 単位の取得の失敗と ASIN が無い Book も種類の名前で並ぶ",
+			result: ApplyResult{
+				Failed: []FailedBook{{BookID: "book-a", Kind: FailureNoASIN}, {BookID: "book-b", Kind: FailureNotebookStructure}, {BookID: "book-c", Kind: FailureHighlightID}},
+			},
+			wantCode: 8,
+			wantErr:  "sync: 3 books were not synced: book-a (book has no ASIN); book-b (unexpected notebook structure); book-c (highlight ID cannot be made)",
 		},
 	}
 	for _, tt := range tests {
@@ -700,7 +732,7 @@ func TestApplyBooksState(t *testing.T) {
 			books:         exactBook,
 			appendErrs:    map[string]error{"page-exact": notionStatusError(http.StatusBadGateway)},
 			appendedFirst: map[string]int{"page-exact": 2},
-			want:          ApplyResult{Exact: []string{"book-exact"}, Failed: []BookFailure{{BookID: "book-exact", Kind: BookFailureAppend}}, Appended: 2},
+			want:          ApplyResult{Exact: []string{"book-exact"}, Failed: []FailedBook{{BookID: "book-exact", Kind: FailureNotionWrite}}, Appended: 2},
 			wantAppends:   map[string][]string{"page-exact": {"a-1", "a-2", "a-3"}},
 			wantDstList:   []string{"page-exact"},
 			wantSaves:     [][]state.HighlightState{{stateRow("book-exact", "a-1", "block-a-1"), stateRow("book-exact", "a-2", "block-a-2")}},
@@ -888,7 +920,7 @@ func TestApplyBooksMarkSynced(t *testing.T) {
 		},
 		{
 			name:      "Highlight の取得が失敗した Book は記録されず、前回の記録も変わらない",
-			srcErrs:   map[string]error{"book-exact": fmt.Errorf("list: %w", context.DeadlineExceeded)},
+			srcErrs:   map[string]error{"book-exact": bookFormatError},
 			wantMarks: []state.BookState{mark("book-new", "page-book-new"), mark("book-adopt", "page-adopt")},
 			wantBooks: map[string]state.BookState{"book-exact": prior},
 		},
@@ -1022,7 +1054,7 @@ func (f *recheckDestination) ListHighlightIDs(_ context.Context, remote destinat
 }
 
 func TestApplyBooksRecheck(t *testing.T) {
-	books := []domain.Book{{ID: "book-a"}, {ID: "book-b"}}
+	books := []domain.Book{{ID: "book-a", ASIN: "ASIN-a"}, {ID: "book-b", ASIN: "ASIN-b"}}
 	matches := map[string]destination.BookMatch{
 		"book-a": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-a"}},
 		"book-b": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-b"}},
@@ -1083,7 +1115,7 @@ func TestApplyBooksRecheck(t *testing.T) {
 			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err503}, {reflect: 0, err: err503}, {reflect: 0, err: err503}}},
 			unreturned: true,
 			want: ApplyResult{
-				Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureAppend}},
+				Exact: []string{"book-a", "book-b"}, Failed: []FailedBook{{BookID: "book-a", Kind: FailureNotionWrite}},
 				Appended: 1 + 1, Rechecked: 1, Resent: 2 + 2,
 			},
 			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}, {"a-2", "a-3"}, {"a-2", "a-3"}}, "page-b": {{"b-1"}}},
@@ -1105,7 +1137,7 @@ func TestApplyBooksRecheck(t *testing.T) {
 			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err429Long}}},
 			unreturned: true,
 			want: ApplyResult{
-				Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureAppend}},
+				Exact: []string{"book-a", "book-b"}, Failed: []FailedBook{{BookID: "book-a", Kind: FailureNotionWrite}},
 				Appended: 0 + 1,
 			},
 			wantSent:  map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
@@ -1123,7 +1155,7 @@ func TestApplyBooksRecheck(t *testing.T) {
 		{
 			name:      "400 は確かめ直さず Book の失敗にする",
 			steps:     map[string][]appendStep{"page-a": {{reflect: 1, err: notionStatusError(http.StatusBadRequest)}}},
-			want:      ApplyResult{Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureAppend}}, Appended: 1 + 1},
+			want:      ApplyResult{Exact: []string{"book-a", "book-b"}, Failed: []FailedBook{{BookID: "book-a", Kind: FailureNotionWrite}}, Appended: 1 + 1},
 			wantSent:  map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
 			wantPages: map[string][]string{"page-a": {"a-1"}, "page-b": {"b-1"}},
 			wantSaved: []string{"a-1"},
@@ -1140,7 +1172,7 @@ func TestApplyBooksRecheck(t *testing.T) {
 			name:       "確かめ直しの一覧が 500 で失敗した Book は失敗に残り、他の Book は続く",
 			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err503}}},
 			listErrs:   []error{notionStatusError(http.StatusInternalServerError)},
-			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureListKnown}}, Appended: 1 + 1, Rechecked: 1},
+			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Failed: []FailedBook{{BookID: "book-a", Kind: FailureNotionWrite}}, Appended: 1 + 1, Rechecked: 1},
 			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
 			wantPages:  map[string][]string{"page-a": {"a-1"}, "page-b": {"b-1"}},
 			wantSaved:  []string{"a-1"},
@@ -1224,7 +1256,7 @@ func TestApplyBooksRecheckCanceled(t *testing.T) {
 	recheckSleep = sleepContext
 	t.Cleanup(func() { recheckSleep = oldSleep })
 
-	books := []domain.Book{{ID: "book-a"}}
+	books := []domain.Book{{ID: "book-a", ASIN: "ASIN-a"}}
 	dst := &recheckDestination{
 		fakeDestination: &fakeDestination{matches: map[string]destination.BookMatch{"book-a": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-a"}}}},
 		pages:           map[string][]string{},

@@ -144,8 +144,8 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	}
 	// 確認（Initial Sync なら）を通ったあと、Initial Sync かどうかにかかわらず none の Book は作成し、adoptable の Book は Adopt し、
 	// ページが決まった Book には既知を除いた Highlight を追記する（§51 / §24）。Highlight は ApplyBooks が Book ごとに取る。
-	// 取得の失敗の仕分けは ApplyBooks に任せる。1 冊だけの構造の異常とタイムアウトは Failed に載って続き、
-	// 全 Book に共通の枠の異常（§73）・ブラウザの失敗・ctx の取消・ローカル状態の不整合は種類を変えずにここへ返る
+	// 取得の失敗の仕分けは ApplyBooks に任せる。1 冊だけの構造の異常と Highlight ID が作れない失敗は Failed に載って続き、
+	// 全 Book に共通の枠の異常（§73）・ブラウザの失敗・ctx の取消と期限切れ・ローカル状態の不整合は種類を変えずにここへ返る
 	applied, noASIN, err := applyBooks(ctx, a, books, total, b, startedAt)
 	if err != nil {
 		return err
@@ -155,9 +155,9 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	record = !synced
 	// 取得に失敗した Book と ASIN の無い Book（exit 7）、skip と書き込み・追記の失敗（exit 8）を分け、両方あれば exit 7 を返す
 	failed := noASIN
-	var written []syncengine.BookFailure
+	var written []syncengine.FailedBook
 	for _, f := range applied.Failed {
-		if f.Kind == syncengine.BookFailureFetch {
+		if f.Kind == syncengine.FailureNotebookStructure || f.Kind == syncengine.FailureHighlightID {
 			failed = append(failed, bookFailure{BookID: f.BookID, Kind: bookFailureSourceFormat})
 			continue
 		}
