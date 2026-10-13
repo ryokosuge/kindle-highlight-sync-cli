@@ -455,3 +455,71 @@ func TestNotionDestinationListHighlightIDsFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestNotionDestinationRefindBook(t *testing.T) {
+	book := kindleBook(testASIN, "Go", "Alan")
+	newPage := bookPage("page-new", testASIN, "", "Go", "Alan")
+	tests := []struct {
+		name       string
+		second     []string
+		wantStatus BookMatchStatus
+		wantID     string
+	}{
+		{name: "1 回目のあとに同じ Book ID のページが現れていれば exact", second: []string{newPage}, wantStatus: "exact", wantID: "page-new"},
+		{name: "同じ Book ID のページが 2 つ以上あれば ambiguous", second: []string{newPage, bookPage("page-dup", testASIN, "", "Go", "Alan")}, wantStatus: "ambiguous"},
+		{name: "該当が無ければ none", wantStatus: "none"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client, requests := newNotionTestClient(t, queryReply(""), queryReply("", tt.second...), queryReply(""))
+			d := NewNotionDestination(client, config.Notion{DataSourceID: testDataSourceID, Mapping: fullMapping})
+
+			first, err := d.FindBook(context.Background(), book)
+			if err != nil {
+				t.Fatalf("FindBook() error = %v", err)
+			}
+			assertMatch(t, first, "none", "")
+
+			got, err := d.RefindBook(context.Background(), book)
+			if err != nil {
+				t.Fatalf("RefindBook() error = %v", err)
+			}
+			assertMatch(t, got, tt.wantStatus, tt.wantID)
+			assertRequests(t, requests(), 2)
+
+			// 照合し直したあとの FindBook は取り直した index を使い、Data Source を取り直さない
+			after, err := d.FindBook(context.Background(), book)
+			if err != nil {
+				t.Fatalf("FindBook() after RefindBook error = %v", err)
+			}
+			assertMatch(t, after, tt.wantStatus, tt.wantID)
+			assertRequests(t, requests(), 2)
+		})
+	}
+}
+
+func TestNotionDestinationRefindBookFailure(t *testing.T) {
+	book := kindleBook(testASIN, "Go", "Alan")
+	client, requests := newNotionTestClient(t,
+		queryReply("", bookPage("page-exact", testASIN, "", "Go", "Alan")),
+		notionReply{status: http.StatusBadRequest, body: notionErrorBody},
+	)
+	d := NewNotionDestination(client, config.Notion{DataSourceID: testDataSourceID, Mapping: fullMapping})
+	if _, err := d.FindBook(context.Background(), book); err != nil {
+		t.Fatalf("FindBook() error = %v", err)
+	}
+
+	got, err := d.RefindBook(context.Background(), book)
+	if code := exitcode.Code(err); code != 4 {
+		t.Fatalf("exitcode.Code(err) = %d, want 4 (err = %v)", code, err)
+	}
+	assertMatch(t, got, "", "")
+
+	// それまでの index が残り、FindBook は取り直さずに照合できる
+	after, err := d.FindBook(context.Background(), book)
+	if err != nil {
+		t.Fatalf("FindBook() after failure error = %v", err)
+	}
+	assertMatch(t, after, "exact", "page-exact")
+	assertRequests(t, requests(), 2)
+}

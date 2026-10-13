@@ -37,6 +37,8 @@ type BookMatch struct {
 // AppendHighlights は部分成功を許容し、error のときも追記できた Highlight を返す（§30）。
 type Destination interface {
 	FindBook(ctx context.Context, book domain.Book) (BookMatch, error)
+	// RefindBook は手元の index を使わず Data Source を取り直して Book を照合し直す。書き込みの結果が分からないときの確認用。
+	RefindBook(ctx context.Context, book domain.Book) (BookMatch, error)
 	CreateBook(ctx context.Context, book domain.Book) (RemoteBook, error)
 	AdoptBook(ctx context.Context, remote RemoteBook, book domain.Book) error
 	UpdateBook(ctx context.Context, remote RemoteBook, book domain.Book) error
