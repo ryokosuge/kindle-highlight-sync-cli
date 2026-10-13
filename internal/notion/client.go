@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"time"
@@ -37,6 +38,7 @@ type redactedError struct {
 	message string
 	cause   error
 	status  *StatusError
+	timeout bool
 }
 
 func (e *redactedError) Error() string { return e.message }
@@ -115,19 +117,26 @@ func New(token string, opts ...Option) *Client {
 
 // notionError は Client が返す error の唯一の出口。メッセージは必ず redactor を通す。
 func (c *Client) notionError(method, path string, err error) error {
+	return c.newNotionError(method, path, err, false)
+}
+
+func (c *Client) newNotionError(method, path string, err error, timeout bool) error {
 	var status *StatusError
 	var se *StatusError
 	if errors.As(err, &se) {
 		status = &StatusError{
-			Status:  se.Status,
-			Code:    c.redactor.String(se.Code),
-			message: c.redactor.String(se.message),
+			Status:        se.Status,
+			Code:          c.redactor.String(se.Code),
+			message:       c.redactor.String(se.message),
+			retryAfter:    se.retryAfter,
+			hasRetryAfter: se.hasRetryAfter,
 		}
 	}
 	return exitcode.New(exitcode.Notion, &redactedError{
 		message: c.redactor.String(fmt.Sprintf("notion: %s %s: %v", method, path, err)),
 		cause:   err,
 		status:  status,
+		timeout: timeout,
 	})
 }
 
@@ -159,7 +168,7 @@ func (c *Client) request(ctx context.Context, method, path string, body, v any, 
 	for n := 1; ; n++ {
 		resp, respBody, err := c.send(ctx, method, path, encoded)
 		if err != nil {
-			return c.notionError(method, path, err)
+			return c.newNotionError(method, path, err, ctx.Err() == nil && isTimeout(err))
 		}
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 			if err := json.Unmarshal(respBody, v); err != nil {
@@ -169,6 +178,11 @@ func (c *Client) request(ctx context.Context, method, path string, body, v any, 
 		}
 
 		statusErr := statusError(resp.StatusCode, respBody)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			if secs, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
+				statusErr.retryAfter, statusErr.hasRetryAfter = time.Duration(secs)*time.Second, true
+			}
+		}
 		if !retry || !retryable(resp.StatusCode) {
 			return c.notionError(method, path, statusErr)
 		}
@@ -219,6 +233,9 @@ type StatusError struct {
 	Status  int
 	Code    string
 	message string
+
+	retryAfter    time.Duration
+	hasRetryAfter bool
 }
 
 func (e *StatusError) Error() string {
@@ -247,4 +264,9 @@ func statusError(status int, body []byte) *StatusError {
 
 func (c *Client) invalidResponse(method, path, format string, args ...any) error {
 	return c.notionError(method, path, fmt.Errorf("invalid response: "+format, args...))
+}
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.As(err, &ne) && ne.Timeout()
 }
