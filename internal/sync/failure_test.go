@@ -14,17 +14,18 @@ import (
 
 func TestFailureKind_String(t *testing.T) {
 	tests := []struct {
+		name string
 		kind FailureKind
 		want string
 	}{
-		{FailureNoASIN, "book has no ASIN"},
-		{FailureNotebookStructure, "unexpected notebook structure"},
-		{FailureHighlightID, "highlight ID cannot be made"},
-		{FailureAmbiguous, "ambiguous"},
-		{FailureNotionWrite, "notion write failed"},
+		{"ASIN が無い", FailureNoASIN, "book has no ASIN"},
+		{"Notebook の構造の異常", FailureNotebookStructure, "unexpected notebook structure"},
+		{"Highlight ID が作れない", FailureHighlightID, "highlight ID cannot be made"},
+		{"ambiguous", FailureAmbiguous, "ambiguous"},
+		{"Notion への書き込みの失敗", FailureNotionWrite, "notion write failed"},
 	}
 	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.kind.String(); got != tt.want {
 				t.Errorf("String() = %q, want %q", got, tt.want)
 			}
