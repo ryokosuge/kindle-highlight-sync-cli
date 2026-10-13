@@ -83,7 +83,8 @@ func withRetrySleep(f func(context.Context, time.Duration) error) Option {
 	}
 }
 
-func withHTTPTimeout(d time.Duration) Option {
+// WithHTTPTimeout は 1 回の HTTP 要求のタイムアウトを差し替える（テストで結果不明の失敗を短い時間で起こす用）。
+func WithHTTPTimeout(d time.Duration) Option {
 	return func(c *Client) {
 		c.http.Timeout = d
 	}

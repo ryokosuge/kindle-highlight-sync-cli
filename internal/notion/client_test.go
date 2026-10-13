@@ -253,7 +253,7 @@ func TestHTTPTimeout(t *testing.T) {
 			case <-r.Context().Done():
 			case <-time.After(2 * time.Second):
 			}
-		}, withHTTPTimeout(50*time.Millisecond))
+		}, WithHTTPTimeout(50*time.Millisecond))
 		start := time.Now()
 		_, err := client.RetrieveDatabase(context.Background(), "db-1")
 		elapsed := time.Since(start)

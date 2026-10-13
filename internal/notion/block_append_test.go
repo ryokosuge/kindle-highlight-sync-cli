@@ -211,7 +211,7 @@ func TestAppendBlockChildrenHTTPTimeout(t *testing.T) {
 		case <-r.Context().Done():
 		case <-time.After(time.Second):
 		}
-	}, withHTTPTimeout(50*time.Millisecond))
+	}, WithHTTPTimeout(50*time.Millisecond))
 	got, err := client.AppendBlockChildren(context.Background(), "page-1", quoteBlocks(1))
 	assertNotionError(t, err, "notion: PATCH "+appendPath+": ", "Client.Timeout exceeded")
 	if got != nil {
@@ -280,7 +280,7 @@ func TestAppendBlockChildrenStatusError(t *testing.T) {
 			case <-r.Context().Done():
 			case <-time.After(time.Second):
 			}
-		}, withHTTPTimeout(50*time.Millisecond))
+		}, WithHTTPTimeout(50*time.Millisecond))
 		_, err := client.AppendBlockChildren(context.Background(), "page-1", quoteBlocks(1))
 		assertNotionError(t, err)
 		if got := isAuthStatus(err); got {
@@ -399,7 +399,7 @@ func TestAppendBlockChildrenRedactsToken(t *testing.T) {
 			case <-r.Context().Done():
 			case <-time.After(time.Second):
 			}
-		}, withHTTPTimeout(50*time.Millisecond))
+		}, WithHTTPTimeout(50*time.Millisecond))
 		_, err := client.AppendBlockChildren(context.Background(), testToken, quoteBlocks(1))
 		assertNotionError(t, err)
 		assertChainHidesToken(t, err)

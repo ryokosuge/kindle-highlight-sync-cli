@@ -53,6 +53,11 @@ func writeApplyResult(w io.Writer, r syncengine.ApplyResult) error {
 		_, _ = fmt.Fprintf(tw, "Rechecked books\t%d\n", r.Rechecked)
 		_, _ = fmt.Fprintf(tw, "Resent highlights\t%d\n", r.Resent)
 	}
+	if len(r.Refound) > 0 {
+		// 作成の結果が分からず照合し直した run だけ出す。起きなかった run の出力は変えない
+		_, _ = fmt.Fprintf(tw, "Refound books\t%d\n", len(r.Refound))
+		_, _ = fmt.Fprintf(tw, "Recovered pages\t%d\n", len(r.Recovered))
+	}
 	_, _ = fmt.Fprintf(tw, "Skipped (ambiguous)\t%d\n", len(r.Skipped))
 	_, _ = fmt.Fprintf(tw, "Failed\t%d\n", len(r.Failed))
 	if err := tw.Flush(); err != nil {

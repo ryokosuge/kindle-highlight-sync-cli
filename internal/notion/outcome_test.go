@@ -66,7 +66,7 @@ func TestOutcomeUnknown(t *testing.T) {
 			case <-r.Context().Done():
 			case <-time.After(2 * time.Second):
 			}
-		}, withHTTPTimeout(50*time.Millisecond))
+		}, WithHTTPTimeout(50*time.Millisecond))
 		err := appendOnce(client, context.Background())
 		if !OutcomeUnknown(err) {
 			t.Errorf("OutcomeUnknown = false, err = %v", err)
