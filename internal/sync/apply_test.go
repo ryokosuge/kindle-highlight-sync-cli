@@ -1437,10 +1437,10 @@ func TestApplyBooksRefindCreate(t *testing.T) {
 				"book-new": applyHighlights("a-1", "a-2", "a-3"), "book-next": applyHighlights("a-1", "a-2", "a-3"),
 			}}
 			waits := 0
-			oldSleep, oldJitter := recheckSleep, recheckJitter
-			recheckSleep = func(context.Context, time.Duration) error { waits++; return nil }
+			oldSleep, oldJitter := RecheckSleep, recheckJitter
+			RecheckSleep = func(context.Context, time.Duration) error { waits++; return nil }
 			recheckJitter = func() time.Duration { return 0 }
-			t.Cleanup(func() { recheckSleep, recheckJitter = oldSleep, oldJitter })
+			t.Cleanup(func() { RecheckSleep, recheckJitter = oldSleep, oldJitter })
 
 			got, err := ApplyBooks(context.Background(), tt.books, src, dst, st, applyNow)
 			if code := exitcode.Code(err); code != tt.wantCode {

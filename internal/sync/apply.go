@@ -174,7 +174,7 @@ func (r *ApplyResult) refindCreated(ctx context.Context, book domain.Book, creat
 			if !ok {
 				return destination.RemoteBook{}, false, createErr
 			}
-			if err := recheckSleep(ctx, d); err != nil {
+			if err := RecheckSleep(ctx, d); err != nil {
 				return destination.RemoteBook{}, false, err
 			}
 		}
