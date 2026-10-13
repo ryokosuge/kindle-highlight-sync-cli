@@ -26,6 +26,7 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
 ## Lint
 
 - `golangci-lint run`（CI は v2.14。`.golangci.yml` は `version: "2"` / `linters.default: standard`）
+- 手元に無ければ `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0` で入れる（`.devin/blueprint.yaml` と同じ版）。入れたあと `$(go env GOPATH)/bin` が PATH に入っていることを確かめる。入れられない環境では、lint を確かめられなかったことを PR 本文に書く
 
 ## Conventions
 
@@ -61,6 +62,7 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
 - 実ホームを触らない。`t.TempDir()` と `t.Setenv`（`XDG_CONFIG_HOME` / `XDG_DATA_HOME`）で隔離する（`root_test.go` の `setupXDG`）
 - CLI は `run(args, &stdout, &stderr)` を直接呼び、exit code と stderr を検証する。`openBrowser` / `syncBody` はテストで差し替えて `t.Cleanup` で戻す
 - 外部 I/O はテストダブルで固定する: Notion は `httptest.NewServer` + `notion.WithBaseURL`、Keychain は `keyring.MockInit()`、Chrome は偽 CDP プロセス
+- `httptest.NewServer` の handler の中では `t.Fatalf` / `t.FailNow` を使わない（handler はテストの goroutine の外で動くため）。handler では記録だけして `t.Errorf` を使うか、要求を記録してテスト本体で検証する
 - `internal/source` の HTML fixture は `internal/source/testdata/` に `<種別>_<状態>.html`（`auth_*` / `library_*` / `highlights_*`）で置く。それ以外の fixture は文字列定数かテスト内で生成する
 - 別プロセスが要るテストは `os/exec` + 環境変数（例: `KHS_LOCK_HELPER_PATH`）で起動する
 - 外部ネットワーク・実 Amazon / 実 Notion に触れるテストは書かない
@@ -74,4 +76,6 @@ internal/exitcode/exitcode.go, internal/lock/lock_test.go, internal/secrets/secr
 internal/source/browser_test.go, internal/source/auth_test.go, internal/source/testdata/,
 internal/notion, internal/domain
 setup（go mod download）と 1 パッケージ / 1 テストの実行コマンドは repo に明記が無く、Go の標準コマンドから導出した
+lint の入れ方: .devin/blueprint.yaml の initialize（golangci-lint@v2.14.0）から写した
+handler 内の t.Fatalf の禁止: Go の testing の制約（FailNow はテストの goroutine から呼ぶ）。Epic #8 で Codex の P1 として指摘された（PR #113 など）
 -->
