@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"slices"
 	"testing"
@@ -945,4 +946,296 @@ func TestApplyBooksMarkSynced(t *testing.T) {
 			t.Errorf("2 回目の marks = %v, want %v", st.marks, want)
 		}
 	})
+}
+
+// unknownOutcomeError は Notion client が実際に返す、結果不明の失敗の error（httptest の応答から作る）。retryAfter が空でなければ Retry-After に入れる。
+func unknownOutcomeError(t *testing.T, status int, retryAfter string) error {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if retryAfter != "" {
+			w.Header().Set("Retry-After", retryAfter)
+		}
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(srv.Close)
+	_, err := notion.New("test-token", notion.WithBaseURL(srv.URL)).AppendBlockChildren(context.Background(), "page", nil)
+	if err == nil {
+		t.Fatalf("status %d: err = nil", status)
+	}
+	return err
+}
+
+// appendStep は recheckDestination の AppendHighlights の 1 回分の応答。渡された先頭から reflect 件だけ反映し、err があれば返す。
+type appendStep struct {
+	reflect int
+	err     error
+}
+
+// recheckDestination は追記で反映した分を ListHighlightIDs が返す fakeDestination。AppendHighlights は steps の順に応答し、尽きたら全部反映して成功する。
+// 反映したがその分を返さない（結果不明）ことを unreturned で表す。
+type recheckDestination struct {
+	*fakeDestination
+	pages      map[string][]string // ページ ID → Notion に在る Highlight ID の順
+	steps      map[string][]appendStep
+	unreturned bool // true のとき、反映した分を AppendHighlights の戻り値に含めない
+	listErrs   []error
+	sent       map[string][][]string // ページ ID → AppendHighlights に渡った Highlight ID の呼び出しごとの順
+}
+
+func (f *recheckDestination) AppendHighlights(_ context.Context, remote destination.RemoteBook, hs []domain.Highlight) ([]destination.RemoteHighlight, error) {
+	if f.sent == nil {
+		f.sent = make(map[string][][]string)
+	}
+	ids := make([]string, 0, len(hs))
+	for _, h := range hs {
+		ids = append(ids, h.ID)
+	}
+	f.sent[remote.ID] = append(f.sent[remote.ID], ids)
+	step := appendStep{reflect: len(hs)}
+	if q := f.steps[remote.ID]; len(q) > 0 {
+		step, f.steps[remote.ID] = q[0], q[1:]
+	}
+	var returned []destination.RemoteHighlight
+	for _, h := range hs[:step.reflect] {
+		f.pages[remote.ID] = append(f.pages[remote.ID], h.ID)
+		if !f.unreturned || step.err == nil {
+			returned = append(returned, destination.RemoteHighlight{ID: "block-" + h.ID, HighlightID: h.ID})
+		}
+	}
+	return returned, step.err
+}
+
+func (f *recheckDestination) ListHighlightIDs(_ context.Context, remote destination.RemoteBook) (map[string]destination.RemoteHighlight, error) {
+	f.listCalls = append(f.listCalls, remote.ID)
+	if len(f.listErrs) > 0 && len(f.listCalls) > 1 { // 1 回目は追記の前の既知の取得。error は確かめ直しの取得に使う
+		err := f.listErrs[0]
+		f.listErrs = f.listErrs[1:]
+		if err != nil {
+			return nil, err
+		}
+	}
+	known := make(map[string]destination.RemoteHighlight)
+	for _, id := range f.pages[remote.ID] {
+		known[id] = destination.RemoteHighlight{ID: "block-" + id, HighlightID: id}
+	}
+	return known, nil
+}
+
+func TestApplyBooksRecheck(t *testing.T) {
+	books := []domain.Book{{ID: "book-a"}, {ID: "book-b"}}
+	matches := map[string]destination.BookMatch{
+		"book-a": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-a"}},
+		"book-b": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-b"}},
+	}
+	highlights := map[string][]domain.Highlight{
+		"book-a": applyHighlights("a-1", "a-2", "a-3"),
+		"book-b": applyHighlights("b-1"),
+	}
+	err503 := unknownOutcomeError(t, http.StatusServiceUnavailable, "")
+	err429 := unknownOutcomeError(t, http.StatusTooManyRequests, "")
+	err429After := unknownOutcomeError(t, http.StatusTooManyRequests, "7")
+	err429Long := unknownOutcomeError(t, http.StatusTooManyRequests, "61")
+
+	tests := []struct {
+		name         string
+		steps        map[string][]appendStep
+		unreturned   bool
+		listErrs     []error
+		want         ApplyResult
+		wantSent     map[string][][]string
+		wantPages    map[string][]string
+		wantSaved    []string // State に保存された book-a の Highlight ID（保存順）
+		wantSleeps   []time.Duration
+		wantCode     int
+		wantListCall int
+	}{
+		{
+			name:       "反映したのに結果不明で返ったときは、確かめ直しで在ると分かった分を送らず成功に数える",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 3, err: err503}}},
+			unreturned: true,
+			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Appended: 3 + 1, Rechecked: 1},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1", "a-2", "a-3"}, "page-b": {"b-1"}},
+			wantSaved:  []string{"a-1", "a-2", "a-3"},
+			wantSleeps: []time.Duration{time.Second},
+		},
+		{
+			name:       "一部を反映して結果不明になったら、未反映の分だけを Kindle の順のまま送り直し、同じ Highlight は 1 つだけになる",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 2, err: err503}}},
+			unreturned: true,
+			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Appended: 3 + 1, Rechecked: 1, Resent: 1},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}, {"a-3"}}, "page-b": {{"b-1"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1", "a-2", "a-3"}, "page-b": {"b-1"}},
+			wantSaved:  []string{"a-1", "a-2", "a-3"},
+			wantSleeps: []time.Duration{time.Second},
+		},
+		{
+			name:       "何も反映していなければ全部を送り直す",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 0, err: err503}}},
+			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Appended: 3 + 1, Rechecked: 1, Resent: 3},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}, {"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1", "a-2", "a-3"}, "page-b": {"b-1"}},
+			wantSaved:  []string{"a-1", "a-2", "a-3"},
+			wantSleeps: []time.Duration{time.Second},
+		},
+		{
+			name:       "確かめ直しと再送は 2 回までで、尽きても未反映が残る Book は失敗に残り、他の Book は続く。保存されるのは確かな分だけ",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err503}, {reflect: 0, err: err503}, {reflect: 0, err: err503}}},
+			unreturned: true,
+			want: ApplyResult{
+				Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureAppend}},
+				Appended: 1 + 1, Rechecked: 1, Resent: 2 + 2,
+			},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}, {"a-2", "a-3"}, {"a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1"}, "page-b": {"b-1"}},
+			wantSaved:  []string{"a-1"},
+			wantSleeps: []time.Duration{time.Second, 2 * time.Second},
+		},
+		{
+			name:       "429 で Retry-After があればその長さを待つ",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 0, err: err429After}}},
+			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Appended: 3 + 1, Rechecked: 1, Resent: 3},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}, {"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1", "a-2", "a-3"}, "page-b": {"b-1"}},
+			wantSaved:  []string{"a-1", "a-2", "a-3"},
+			wantSleeps: []time.Duration{7 * time.Second},
+		},
+		{
+			name:       "429 で Retry-After が 60 秒を超えるなら待たず確かめ直しもせず、その Book を失敗にする",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err429Long}}},
+			unreturned: true,
+			want: ApplyResult{
+				Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureAppend}},
+				Appended: 0 + 1,
+			},
+			wantSent:  map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages: map[string][]string{"page-a": {"a-1"}, "page-b": {"b-1"}},
+		},
+		{
+			name:       "429 で Retry-After が無いときは 1 秒・2 秒を待つ",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 0, err: err429}, {reflect: 0, err: err429}}},
+			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Appended: 3 + 1, Rechecked: 1, Resent: 6},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}, {"a-1", "a-2", "a-3"}, {"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1", "a-2", "a-3"}, "page-b": {"b-1"}},
+			wantSaved:  []string{"a-1", "a-2", "a-3"},
+			wantSleeps: []time.Duration{time.Second, 2 * time.Second},
+		},
+		{
+			name:      "400 は確かめ直さず Book の失敗にする",
+			steps:     map[string][]appendStep{"page-a": {{reflect: 1, err: notionStatusError(http.StatusBadRequest)}}},
+			want:      ApplyResult{Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureAppend}}, Appended: 1 + 1},
+			wantSent:  map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages: map[string][]string{"page-a": {"a-1"}, "page-b": {"b-1"}},
+			wantSaved: []string{"a-1"},
+		},
+		{
+			name:      "401 は確かめ直さず止まる",
+			steps:     map[string][]appendStep{"page-a": {{reflect: 0, err: notionStatusError(http.StatusUnauthorized)}}},
+			want:      ApplyResult{Exact: []string{"book-a"}},
+			wantSent:  map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}},
+			wantPages: map[string][]string{"page-a": nil},
+			wantCode:  4,
+		},
+		{
+			name:       "確かめ直しの一覧が 500 で失敗した Book は失敗に残り、他の Book は続く",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err503}}},
+			listErrs:   []error{notionStatusError(http.StatusInternalServerError)},
+			want:       ApplyResult{Exact: []string{"book-a", "book-b"}, Failed: []BookFailure{{BookID: "book-a", Kind: BookFailureListKnown}}, Appended: 1 + 1, Rechecked: 1},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}, "page-b": {{"b-1"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1"}, "page-b": {"b-1"}},
+			wantSaved:  []string{"a-1"},
+			wantSleeps: []time.Duration{time.Second},
+		},
+		{
+			name:       "確かめ直しの一覧が 401 で失敗したら止まる",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err503}}},
+			listErrs:   []error{notionStatusError(http.StatusUnauthorized)},
+			want:       ApplyResult{Exact: []string{"book-a"}, Appended: 1, Rechecked: 1},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1"}},
+			wantSaved:  []string{"a-1"},
+			wantSleeps: []time.Duration{time.Second},
+			wantCode:   4,
+		},
+		{
+			name:       "確かめ直しの一覧が Sync Marker の prefix 違い（exit 6）で失敗したら止まる",
+			steps:      map[string][]appendStep{"page-a": {{reflect: 1, err: err503}}},
+			listErrs:   []error{exitcode.New(exitcode.LocalState, errors.New("sync marker scheme is incompatible"))},
+			want:       ApplyResult{Exact: []string{"book-a"}, Appended: 1, Rechecked: 1},
+			wantSent:   map[string][][]string{"page-a": {{"a-1", "a-2", "a-3"}}},
+			wantPages:  map[string][]string{"page-a": {"a-1"}},
+			wantSaved:  []string{"a-1"},
+			wantSleeps: []time.Duration{time.Second},
+			wantCode:   6,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sleeps []time.Duration
+			oldSleep, oldJitter := recheckSleep, recheckJitter
+			recheckSleep = func(_ context.Context, d time.Duration) error { sleeps = append(sleeps, d); return nil }
+			recheckJitter = func() time.Duration { return 0 }
+			t.Cleanup(func() { recheckSleep, recheckJitter = oldSleep, oldJitter })
+
+			dst := &recheckDestination{
+				fakeDestination: &fakeDestination{matches: matches},
+				pages:           map[string][]string{}, steps: tt.steps, unreturned: tt.unreturned, listErrs: tt.listErrs,
+			}
+			st := &fakeState{}
+			got, err := ApplyBooks(context.Background(), books, &fakeSource{highlights: highlights}, dst, st, applyNow)
+			if code := exitcode.Code(err); code != tt.wantCode {
+				t.Fatalf("exitcode.Code(err) = %d, want %d (err = %v)", code, tt.wantCode, err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ApplyBooks() = %+v, want %+v", got, tt.want)
+			}
+			if !reflect.DeepEqual(dst.sent, tt.wantSent) {
+				t.Errorf("sent = %v, want %v", dst.sent, tt.wantSent)
+			}
+			for page, ids := range tt.wantPages {
+				if !slices.Equal(dst.pages[page], ids) {
+					t.Errorf("pages[%s] = %v, want %v", page, dst.pages[page], ids)
+				}
+			}
+			if !slices.Equal(sleeps, tt.wantSleeps) {
+				t.Errorf("sleeps = %v, want %v", sleeps, tt.wantSleeps)
+			}
+			var saved []string
+			for _, rows := range st.saves {
+				for _, row := range rows {
+					if row.KindleBookID == "book-a" {
+						saved = append(saved, row.KindleHighlightID)
+						if want := "block-" + row.KindleHighlightID; row.DestinationHighlightID != want {
+							t.Errorf("Block ID of %s = %q, want %q", row.KindleHighlightID, row.DestinationHighlightID, want)
+						}
+					}
+				}
+			}
+			if !slices.Equal(saved, tt.wantSaved) {
+				t.Errorf("saved = %v, want %v", saved, tt.wantSaved)
+			}
+		})
+	}
+}
+
+func TestApplyBooksRecheckCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	oldSleep := recheckSleep
+	recheckSleep = sleepContext
+	t.Cleanup(func() { recheckSleep = oldSleep })
+
+	books := []domain.Book{{ID: "book-a"}}
+	dst := &recheckDestination{
+		fakeDestination: &fakeDestination{matches: map[string]destination.BookMatch{"book-a": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-a"}}}},
+		pages:           map[string][]string{},
+		steps:           map[string][]appendStep{"page-a": {{reflect: 0, err: unknownOutcomeError(t, http.StatusServiceUnavailable, "")}}},
+	}
+	cancel()
+	_, err := ApplyBooks(ctx, books, &fakeSource{highlights: map[string][]domain.Highlight{"book-a": applyHighlights("a-1")}}, dst, &fakeState{}, applyNow)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("err = %v, want context.Canceled", err)
+	}
+	if len(dst.listCalls) != 1 {
+		t.Errorf("listCalls = %v, want 追記の前の 1 回だけ（待たずに抜ける）", dst.listCalls)
+	}
 }

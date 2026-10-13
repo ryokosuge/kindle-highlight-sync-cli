@@ -93,8 +93,8 @@ func TestSyncBookCompletion(t *testing.T) {
 				defer mu.Unlock()
 				requests = append(requests, recordedRequest{method: r.Method, path: path})
 				if failCreated.Load() && r.Method == http.MethodPatch && path == testCreatedBlocksPath {
-					w.WriteHeader(http.StatusInternalServerError)
-					_, _ = w.Write([]byte(`{"object":"error","status":500,"code":"internal_server_error","message":"failed"}`))
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"object":"error","status":400,"code":"validation_error","message":"failed"}`))
 					return
 				}
 				_, _ = w.Write([]byte(reply(r.Method, path, body)))
