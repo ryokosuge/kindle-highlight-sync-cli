@@ -92,7 +92,8 @@ func (r ApplyResult) PartialFailure() error {
 // 追記が失敗しても、成功した分を保存してから失敗を返す。State の読み取り・保存の失敗は、残りの Book を書かずに exitcode.LocalState の error を返す。
 // Highlight が 0 件の Book は State も Notion の一覧も読まず、追記するものが無い Book では AppendHighlights を呼ばない。
 // 取得の順は dry-run（BuildPlan。既知 → Highlight）と違うが、既知を除く判定（unknownHighlights）は共有している。
-// 1 冊の書き込み・Highlight の取得・既知の取得が 400 / 429 / 5xx / タイムアウトで失敗してもその Book を Failed に残して残りを続ける（§72）。
+// ASIN の無い Book は照合も書き込みも取得もせず FailureNoASIN で Failed に残して残りを続ける。
+// 1 冊の書き込み・既知の取得が 400 / 429 / 5xx / タイムアウトで失敗しても、Highlight の取得が 1 冊だけの構造の異常か Highlight ID が作れない error で失敗しても、その Book を Failed に残して残りを続ける（§72）。
 // タイムアウトで作成の結果が分からない Book は再送しない（§29。次の sync の照合で作成済みなら exact になる）。
 // 追記の結果が分からない失敗（notion.OutcomeUnknown）は、待ってから Notion の Highlight を取り直し、未反映の分だけを 2 回まで送り直す（appendWithRecheck）。
 // 書き込みが 401 / 403 / 404 で失敗したとき（§73）と FindBook が失敗したときは、その時点で残りを書かずに exitcode.Notion の error を返す。
@@ -102,6 +103,11 @@ func (r ApplyResult) PartialFailure() error {
 func ApplyBooks(ctx context.Context, books []domain.Book, src highlightLister, dst destination.Destination, st highlightStore, now time.Time) (ApplyResult, error) {
 	var r ApplyResult
 	for _, b := range books {
+		if b.ASIN == "" {
+			// Highlight のページは ASIN でしか開けない。黙って飛ばすと取りこぼしに気づけないので、照合も書き込みもせず失敗に数える
+			r.Failed = append(r.Failed, FailedBook{BookID: b.ID, Kind: FailureNoASIN})
+			continue
+		}
 		m, err := dst.FindBook(ctx, b)
 		if err != nil {
 			return r, exitcode.New(exitcode.Notion, fmt.Errorf("sync: find book %s: %w", b.ID, err))
@@ -172,10 +178,7 @@ func (r *ApplyResult) appendUnknown(ctx context.Context, book domain.Book, remot
 	if err != nil {
 		kind, ok := ClassifyFetchError(err)
 		if !ok {
-			if !errors.Is(err, context.DeadlineExceeded) {
-				return false, err
-			}
-			kind = FailureNotebookStructure
+			return false, err
 		}
 		return false, r.fail(book.ID, kind, err)
 	}
@@ -284,9 +287,9 @@ func localStateError(op, bookID string, err error) error {
 
 // fail は書き込みの失敗を仕分ける。context のキャンセルなら Book 単位の失敗でも fatal でもなく、元の error をそのまま返して止める
 // （中断時の exit code は呼び出し側が決める）。fatal（§73）なら exitcode.Notion の error を返し、そうでなければ Failed に足して nil を返す。
-// ローカル状態の不整合（exitcode.LocalState）と、Highlight の取得の失敗のうちタイムアウトでも 1 冊だけの構造の異常でもないもの（ブラウザの失敗・ErrHighlightsFrame など）も、
-// 種類を変えない元の error をそのまま返して止める。
-// タイムアウト（context.DeadlineExceeded）はキャンセルに含めず、Book 単位の失敗として続ける（§72）。
+// ローカル状態の不整合（exitcode.LocalState）も、種類を変えない元の error をそのまま返して止める。
+// Highlight の取得の失敗の仕分けは ClassifyFetchError が行い、Book 単位でないもの（ブラウザの失敗・ErrHighlightsFrame・タイムアウトなど）は fail を通さず元の error をそのまま返して止める。
+// 書き込みのタイムアウト（context.DeadlineExceeded）はキャンセルに含めず、Book 単位の失敗として続ける（§72）。
 func (r *ApplyResult) fail(bookID string, kind FailureKind, err error) error {
 	if errors.Is(err, context.Canceled) {
 		return err
@@ -298,7 +301,6 @@ func (r *ApplyResult) fail(bookID string, kind FailureKind, err error) error {
 	if exitcode.Code(err) == int(exitcode.LocalState) {
 		return err
 	}
-	// Highlight の取得の失敗は、タイムアウトでも 1 冊だけの構造の異常でもなければ全 Book に共通（ブラウザ・枠の異常など）なので種類を保って止める
 	r.Failed = append(r.Failed, FailedBook{BookID: bookID, Kind: kind})
 	return nil
 }

@@ -84,10 +84,10 @@ func stateRow(bookID, highlightID, blockID string) state.HighlightState {
 
 // applyBooks は照合の結果が none / adoptable / exact / ambiguous の順に並ぶ 4 冊。タイトルは文言に出ないことを確かめるために入れる。
 var applyBooks = []domain.Book{
-	{ID: "book-new", Title: "New Book"},
-	{ID: "book-adopt", Title: "Adopt Book"},
-	{ID: "book-exact", Title: "Exact Book"},
-	{ID: "book-ambiguous", Title: "Ambiguous Book"},
+	{ID: "book-new", ASIN: "ASIN-new", Title: "New Book"},
+	{ID: "book-adopt", ASIN: "ASIN-adopt", Title: "Adopt Book"},
+	{ID: "book-exact", ASIN: "ASIN-exact", Title: "Exact Book"},
+	{ID: "book-ambiguous", ASIN: "ASIN-ambiguous", Title: "Ambiguous Book"},
 }
 
 var applyMatches = map[string]destination.BookMatch{
@@ -138,6 +138,16 @@ func TestApplyBooks(t *testing.T) {
 			books:   nil,
 			matches: applyMatches,
 			want:    ApplyResult{},
+		},
+		{
+			name:    "ASIN の無い Book は照合も書き込みもせず ASIN が無い失敗に数え、残りの Book は同期する",
+			books:   []domain.Book{{ID: "book-no-asin", Title: "No ASIN"}, applyBooks[0]},
+			matches: applyMatches,
+			want: ApplyResult{
+				Created: []string{"book-new"},
+				Failed:  []FailedBook{{BookID: "book-no-asin", Kind: FailureNoASIN}},
+			},
+			wantWrites: []string{"create book-new"},
 		},
 		{
 			name:      "CreateBook が 400 で失敗しても残りの Book を続け、失敗した Book ID が残る",
@@ -327,6 +337,8 @@ var (
 	bookFormatError      = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: highlight row: %w", source.ErrSourceFormat))
 	highlightsFrameError = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: highlights page: %w: %w", source.ErrHighlightsFrame, source.ErrSourceFormat))
 	browserError         = exitcode.New(exitcode.Browser, errors.New("browser: page crashed"))
+	highlightIDError     = exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: row 1: %w: %w", domain.ErrMissingAnnotationID, source.ErrSourceFormat))
+	wrappedDeadlineError = exitcode.New(exitcode.Browser, fmt.Errorf("source: highlights page: %w", context.DeadlineExceeded))
 )
 
 func applyHighlights(ids ...string) []domain.Highlight {
@@ -465,32 +477,44 @@ func TestApplyBooksAppend(t *testing.T) {
 			wantListCalls: []string{"page-adopt"},
 		},
 		{
-			name:    "Highlight の取得がタイムアウトしたら残りの Book を続け、その Book ID が失敗に残る",
-			srcErrs: map[string]error{"book-exact": context.DeadlineExceeded},
+			name:    "Highlight の取得が Highlight ID を作れず失敗したら残りの Book を続け、その Book には追記しない",
+			srcErrs: map[string]error{"book-exact": highlightIDError},
 			want: ApplyResult{
 				Created:  []string{"book-new"},
 				Adopted:  []string{"book-adopt"},
 				Exact:    []string{"book-exact"},
 				Skipped:  []string{"book-ambiguous"},
-				Failed:   []FailedBook{{BookID: "book-exact", Kind: FailureNotebookStructure}},
+				Failed:   []FailedBook{{BookID: "book-exact", Kind: FailureHighlightID}},
 				Appended: 6,
 			},
 			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
 			wantListCalls: []string{"page-adopt"},
 		},
 		{
-			name:    "包まれたタイムアウトで Highlight の取得が失敗しても残りの Book を続ける",
-			srcErrs: map[string]error{"book-adopt": exitcode.New(exitcode.Browser, fmt.Errorf("source: highlights page: %w", context.DeadlineExceeded))},
+			name:    "Highlight の取得がタイムアウトしたら種類を保って残りの Book を書かずに止める",
+			srcErrs: map[string]error{"book-exact": context.DeadlineExceeded},
 			want: ApplyResult{
 				Created:  []string{"book-new"},
 				Adopted:  []string{"book-adopt"},
 				Exact:    []string{"book-exact"},
-				Skipped:  []string{"book-ambiguous"},
-				Failed:   []FailedBook{{BookID: "book-adopt", Kind: FailureNotebookStructure}},
 				Appended: 6,
 			},
-			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-exact": {"a-1", "a-2", "a-3"}},
-			wantListCalls: []string{"page-exact"},
+			wantAppends:   map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}, "page-adopt": {"a-1", "a-2", "a-3"}},
+			wantListCalls: []string{"page-adopt"},
+			wantCode:      1,
+			wantErr:       context.DeadlineExceeded.Error(),
+		},
+		{
+			name:    "包まれたタイムアウトで Highlight の取得が失敗しても種類を保って残りの Book を書かずに止める",
+			srcErrs: map[string]error{"book-adopt": wrappedDeadlineError},
+			want: ApplyResult{
+				Created:  []string{"book-new"},
+				Adopted:  []string{"book-adopt"},
+				Appended: 3,
+			},
+			wantAppends: map[string][]string{"page-book-new": {"a-1", "a-2", "a-3"}},
+			wantCode:    5,
+			wantErr:     wrappedDeadlineError.Error(),
 		},
 		{
 			name:    "ブラウザの失敗で Highlight が取れなければ種類を保って残りの Book を書かずに止める",
@@ -632,6 +656,14 @@ func TestApplyResultPartialFailure(t *testing.T) {
 			},
 			wantCode: 8,
 			wantErr:  "sync: 2 books were not synced: book-ambiguous (ambiguous); book-new (notion write failed)",
+		},
+		{
+			name: "Book 単位の取得の失敗と ASIN が無い Book も種類の名前で並ぶ",
+			result: ApplyResult{
+				Failed: []FailedBook{{BookID: "book-a", Kind: FailureNoASIN}, {BookID: "book-b", Kind: FailureNotebookStructure}, {BookID: "book-c", Kind: FailureHighlightID}},
+			},
+			wantCode: 8,
+			wantErr:  "sync: 3 books were not synced: book-a (book has no ASIN); book-b (unexpected notebook structure); book-c (highlight ID cannot be made)",
 		},
 	}
 	for _, tt := range tests {
@@ -888,7 +920,7 @@ func TestApplyBooksMarkSynced(t *testing.T) {
 		},
 		{
 			name:      "Highlight の取得が失敗した Book は記録されず、前回の記録も変わらない",
-			srcErrs:   map[string]error{"book-exact": fmt.Errorf("list: %w", context.DeadlineExceeded)},
+			srcErrs:   map[string]error{"book-exact": bookFormatError},
 			wantMarks: []state.BookState{mark("book-new", "page-book-new"), mark("book-adopt", "page-adopt")},
 			wantBooks: map[string]state.BookState{"book-exact": prior},
 		},
@@ -1022,7 +1054,7 @@ func (f *recheckDestination) ListHighlightIDs(_ context.Context, remote destinat
 }
 
 func TestApplyBooksRecheck(t *testing.T) {
-	books := []domain.Book{{ID: "book-a"}, {ID: "book-b"}}
+	books := []domain.Book{{ID: "book-a", ASIN: "ASIN-a"}, {ID: "book-b", ASIN: "ASIN-b"}}
 	matches := map[string]destination.BookMatch{
 		"book-a": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-a"}},
 		"book-b": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-b"}},
@@ -1224,7 +1256,7 @@ func TestApplyBooksRecheckCanceled(t *testing.T) {
 	recheckSleep = sleepContext
 	t.Cleanup(func() { recheckSleep = oldSleep })
 
-	books := []domain.Book{{ID: "book-a"}}
+	books := []domain.Book{{ID: "book-a", ASIN: "ASIN-a"}}
 	dst := &recheckDestination{
 		fakeDestination: &fakeDestination{matches: map[string]destination.BookMatch{"book-a": {Status: destination.BookMatchExact, Book: &destination.RemoteBook{ID: "page-a"}}}},
 		pages:           map[string][]string{},
