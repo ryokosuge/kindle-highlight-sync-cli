@@ -230,26 +230,26 @@ func TestSync(t *testing.T) {
 			wantHLBooks  []domain.Book // ListHighlights に渡った Book の順
 		}{
 			{
-				name:         "1 冊だけが構造の異常なら残りの Book を取り終えてから exit 7 で終わり、その Book を Book ID と種類で区別する",
+				name:         "1 冊だけが構造の異常なら残りの Book を取り終えてから exit 8 で終わり、その Book を Book ID と種類で区別する",
 				books:        []domain.Book{book1, book2, book3},
 				highlightErr: map[string]error{"book-id-2": bookErr},
-				wantCode:     7,
-				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: book-id-2 (unexpected notebook structure)\n",
+				wantCode:     8,
+				wantStderr:   "partial failure: sync: 1 books were not synced: book-id-2 (unexpected notebook structure)\n",
 				wantHLBooks:  []domain.Book{book1, book2, book3},
 			},
 			{
-				name:        "ASIN が無い Book には ListHighlights を呼ばず、残りの Book を取り終えてから exit 7 で終わり、その Book を Book ID と「ASIN が無い」で区別する",
+				name:        "ASIN が無い Book には ListHighlights を呼ばず、残りの Book を取り終えてから exit 8 で終わり、その Book を Book ID と「ASIN が無い」で区別する",
 				books:       []domain.Book{book1, bookNoASIN, book3},
-				wantCode:    7,
-				wantStderr:  "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantCode:    8,
+				wantStderr:  "partial failure: sync: 1 books were not synced: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
 				wantHLBooks: []domain.Book{book1, book3},
 			},
 			{
 				name:         "複数の Book が失敗したら Book 一覧の順にすべて区別する",
 				books:        []domain.Book{book1, bookNoASIN, book2, book3},
 				highlightErr: map[string]error{"book-id-3": bookErr},
-				wantCode:     7,
-				wantStderr:   "source format error: sync: highlights of 2 of 4 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN); book-id-3 (unexpected notebook structure)\n",
+				wantCode:     8,
+				wantStderr:   "partial failure: sync: 2 books were not synced: b1-0123456789abcdef0123456789abcdef (book has no ASIN); book-id-3 (unexpected notebook structure)\n",
 				wantHLBooks:  []domain.Book{book1, book2, book3},
 			},
 			{
@@ -364,7 +364,7 @@ func TestSync(t *testing.T) {
 		}
 	})
 
-	t.Run("Book 一覧が構造の異常を返すと exit 7 で終わり、見つからなかった構造を 1 行出す", func(t *testing.T) {
+	t.Run("Book 一覧が構造の異常を返すと exit 8 で終わり、見つからなかった構造を 1 行出す", func(t *testing.T) {
 		// internal/source の listBooks が返す実際の形（newFormatError で包まれた SourceFormat の種類）
 		listErr := exitcode.New(exitcode.SourceFormat, fmt.Errorf("source: list books: page 1: %w",
 			fmt.Errorf("source: library page: notebook root container is missing: %w", source.ErrSourceFormat)))
