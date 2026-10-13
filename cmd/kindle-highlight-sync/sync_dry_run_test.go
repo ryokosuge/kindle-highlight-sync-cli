@@ -316,6 +316,55 @@ func TestSyncDryRun(t *testing.T) {
 		}
 	})
 
+	t.Run("予定の算出で 1 冊の Highlight のページだけが構造の異常なら、その Book を除いた予定を出して exit 7 で終わる", func(t *testing.T) {
+		header := []string{"Kindle Book", "Match Status", "Matched Notion Page", "Action", "Highlights to append"}
+		tests := []struct {
+			name         string
+			highlightErr map[string]error
+			wantCells    [][]string
+			wantStderr   string
+		}{
+			{
+				name:         "none の Book の取得が構造の異常",
+				highlightErr: map[string]error{dryRunBookNew.ID: errSourceFormatBook},
+				wantCells: [][]string{
+					header,
+					{dryRunBookExact.Title, "exact", "page-exact", "append", "1"},
+					{dryRunBookAmbiguous.Title, "ambiguous", "-", "skip", "-"},
+					{},
+					{"Exact matches", "1"},
+					{"Adoptable matches", "0"},
+					{"New books", "0"},
+					{"Ambiguous", "1"},
+					{"Highlights to append", "1"},
+					{"Target books", "3 of 3"},
+				},
+				wantStderr: "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				setupXDG(t, validConfigTOML)
+				setupDryRunNotion(t, dryRunReplies())
+				b := newDryRunBrowser()
+				b.highlightErr = tt.highlightErr
+				stubBrowser(t, b, nil)
+
+				code, stdout, stderr := runSyncDryRun(t)
+				if code != 7 {
+					t.Errorf("run(sync --dry-run) = %d, want 7 (stderr = %q)", code, stderr)
+				}
+				if stderr != tt.wantStderr {
+					t.Errorf("stderr = %q, want %q", stderr, tt.wantStderr)
+				}
+				got := planCells(t, stdout)
+				if !reflect.DeepEqual(got, tt.wantCells) {
+					t.Errorf("run(sync --dry-run) stdout cells = %q, want %q", got, tt.wantCells)
+				}
+			})
+		}
+	})
+
 	t.Run("認証切れ・同期先の組み立ての失敗・Notion の取得の失敗では予定を出さずに止まる", func(t *testing.T) {
 		keychainErr := errors.New("keychain boom")
 		tests := []struct {

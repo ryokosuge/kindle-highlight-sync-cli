@@ -360,6 +360,44 @@ func TestSyncInitial(t *testing.T) {
 		}
 	})
 
+	t.Run("予定の算出で 1 冊の Highlight のページだけが構造の異常なら、確認の前に exit 7 で止まり Notion に書かず記録しない", func(t *testing.T) {
+		tests := []struct {
+			name         string
+			highlightErr map[string]error
+			wantCode     int
+			wantStderr   string
+		}{
+			{
+				name:         "none の Book の取得が構造の異常",
+				highlightErr: map[string]error{dryRunBookNew.ID: errSourceFormatBook},
+				wantCode:     7,
+				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				p := setupXDG(t, validConfigTOML)
+				requests, _ := setupDryRunNotion(t, initialReplies())
+				stubSyncPrompter(t, "y\n", true)
+				b := newInitialBrowser()
+				b.highlightErr = tt.highlightErr
+				stubBrowser(t, b, nil)
+
+				code, stderr := runSync(t)
+				if code != tt.wantCode {
+					t.Errorf("run(sync) code = %d, want %d", code, tt.wantCode)
+				}
+				if stderr != tt.wantStderr {
+					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
+				}
+				assertRequests(t, requests(), initialReadRequests...)
+				if initialSyncRecorded(t, p) {
+					t.Error("initial_sync_completed_at recorded, want not recorded")
+				}
+			})
+		}
+	})
+
 	t.Run("設定エラー（exit 3）・認証切れ（exit 2）・全 Book に共通の失敗・ブラウザを閉じる失敗（exit 5）で終わった run は記録しない", func(t *testing.T) {
 		closeErr := exitcode.New(exitcode.Browser, errors.New("source: close browser: boom"))
 		tests := []struct {

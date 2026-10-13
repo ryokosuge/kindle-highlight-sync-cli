@@ -132,11 +132,15 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 		return err // state.db を読めない失敗は exitcode.LocalState（6）で包まれている
 	}
 	if !synced {
-		// Initial Sync（§47）。予定の算出（BuildPlan）は Book 単位の失敗を許さないので、実行の取得には流用せず Highlight を予定と実行で 1 回ずつ取る。
+		// Initial Sync（§47）。実行の取得には予定を流用せず Highlight を予定と実行で 1 回ずつ取る。
+		// 予定の算出で Highlight を取れなかった Book があれば、確認の前に exit 7 で止める。ApplyBooks が同じ失敗を見つける前に Notion へ書くのを防ぐ。
 		// 予定から除いた ASIN の無い Book は実行でも同じ失敗に数えるので、ここでは捨てる
 		plan, _, err := buildSyncPlan(ctx, a, books, b)
 		if err != nil {
 			return err
+		}
+		if failed := planFailures(plan); len(failed) > 0 {
+			return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
 		}
 		if err := confirmInitialSync(a.prompt, plan.Summary, a.prompt.interactive(), a.yes); err != nil {
 			return err
@@ -235,6 +239,7 @@ func writeDryRunPlan(ctx context.Context, a *app, books []domain.Book, total int
 
 // buildSyncPlan は Book を Notion と照合して予定を組み、予定から除いた Book を失敗として返す。
 // ASIN の無い Book は Highlight のページを開けないので、通常の sync と同じく bookFailureNoASIN に集めて照合から除く。
+// BuildPlan が Plan.Failed に残した Book も合流させる（ASIN 無しは bookFailureNoASIN、それ以外は bookFailureSourceFormat）。
 // 同期先の組み立て（exit 3）と照合（exit 4）の失敗は種類を変えずに返す。
 func buildSyncPlan(ctx context.Context, a *app, books []domain.Book, src browser) (syncengine.Plan, []bookFailure, error) {
 	dst, err := newDestination(a)
@@ -254,7 +259,20 @@ func buildSyncPlan(ctx context.Context, a *app, books []domain.Book, src browser
 	if err != nil {
 		return syncengine.Plan{}, nil, err
 	}
-	return plan, failed, nil
+	return plan, append(failed, planFailures(plan)...), nil
+}
+
+// planFailures は BuildPlan が Plan.Failed に残した Book を bookFailure にする（ASIN 無しは bookFailureNoASIN、それ以外は bookFailureSourceFormat）。
+func planFailures(plan syncengine.Plan) []bookFailure {
+	failed := make([]bookFailure, 0, len(plan.Failed))
+	for _, f := range plan.Failed {
+		kind := bookFailureSourceFormat
+		if f.Kind == syncengine.FailureNoASIN {
+			kind = bookFailureNoASIN
+		}
+		failed = append(failed, bookFailure{BookID: f.BookID, Kind: kind})
+	}
+	return failed
 }
 
 func newSyncCmd(a *app) *cobra.Command {
