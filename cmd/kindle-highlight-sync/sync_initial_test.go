@@ -278,7 +278,7 @@ func TestSyncInitial(t *testing.T) {
 		}
 	})
 
-	t.Run("確認を通過した run は success でも Book 単位の失敗（exit 7）でも記録し、続く sync では予定の算出も確認も行わない", func(t *testing.T) {
+	t.Run("確認を通過した run は success でも Book 単位の失敗（exit 8）でも記録し、続く sync では予定の算出も確認も行わない", func(t *testing.T) {
 		tests := []struct {
 			name         string
 			books        []domain.Book
@@ -292,19 +292,19 @@ func TestSyncInitial(t *testing.T) {
 				wantCode: 0,
 			},
 			{
-				// ASIN の無い Book は予定の算出から除かれ、取得のループで失敗に数えられる
-				name:       "ASIN の無い Book があって exit 7 で終わる（partial）",
+				// ASIN の無い Book は予定の算出で失敗に残り、実行には渡されず失敗に合流する
+				name:       "ASIN の無い Book があって exit 8 で終わる（partial）",
 				books:      slices.Concat(initialBooks, []domain.Book{dryRunBookNoASIN}),
-				wantCode:   7,
-				wantStderr: "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
+				wantCode:   8,
+				wantStderr: "partial failure: sync: 1 books were not synced: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
 			},
 			{
 				// 予定の算出では取れた Book の Highlight のページが、実行では構造の異常になる
-				name:         "1 冊の Highlight のページだけが構造の異常で exit 7 で終わる（partial）",
+				name:         "1 冊の Highlight のページだけが構造の異常で exit 8 で終わる（partial）",
 				books:        initialBooks,
 				highlightErr: map[string]error{dryRunBookNew.ID: errSourceFormatBook},
-				wantCode:     7,
-				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
+				wantCode:     8,
+				wantStderr:   "partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
 			},
 		}
 		for _, tt := range tests {
@@ -360,7 +360,7 @@ func TestSyncInitial(t *testing.T) {
 		}
 	})
 
-	t.Run("予定の算出で 1 冊の Highlight のページだけが構造の異常なら、確認の前に exit 7 で止まり Notion に書かず記録しない", func(t *testing.T) {
+	t.Run("予定の算出で 1 冊の Highlight のページだけが構造の異常なら、確認の後に残りの Book を同期し、その Book は書かずに exit 8 で終わって partial として記録する", func(t *testing.T) {
 		tests := []struct {
 			name         string
 			highlightErr map[string]error
@@ -370,8 +370,8 @@ func TestSyncInitial(t *testing.T) {
 			{
 				name:         "none の Book の取得が構造の異常",
 				highlightErr: map[string]error{dryRunBookNew.ID: errSourceFormatBook},
-				wantCode:     7,
-				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
+				wantCode:     8,
+				wantStderr:   "0 books will be created.\n1 existing pages will be adopted.\n\nContinue? [y/N] partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
 			},
 		}
 		for _, tt := range tests {
@@ -390,9 +390,11 @@ func TestSyncInitial(t *testing.T) {
 				if stderr != tt.wantStderr {
 					t.Errorf("run(sync) stderr = %q, want %q", stderr, tt.wantStderr)
 				}
-				assertRequests(t, requests(), initialReadRequests...)
-				if initialSyncRecorded(t, p) {
-					t.Error("initial_sync_completed_at recorded, want not recorded")
+				// 失敗に残った Book は確認した件数の外なので、実行でページを作らず、残りの Book は同期する
+				applyWithoutCreate := slices.DeleteFunc(slices.Clone(initialApplyRequestsNewBookFailed), func(r string) bool { return r == "POST "+testPagesPath })
+				assertRequests(t, requests(), slices.Concat(initialReadRequests, applyWithoutCreate)...)
+				if !initialSyncRecorded(t, p) {
+					t.Error("initial_sync_completed_at not recorded, want recorded as partial")
 				}
 			})
 		}
@@ -464,15 +466,15 @@ func TestSyncInitial(t *testing.T) {
 				wantRequests: initialAppliedRequests,
 			},
 			{
-				// Book 単位の失敗と閉じる失敗が重なった run も記録しない。返すのは本体の失敗（exit 7）
-				name:         "Book 単位の失敗のあとにブラウザを閉じるのに失敗すると exit 7 のまま記録しない",
+				// Book 単位の失敗と閉じる失敗が重なった run も記録しない。返すのは本体の失敗（exit 8）
+				name:         "Book 単位の失敗のあとにブラウザを閉じるのに失敗すると exit 8 のまま記録しない",
 				configTOML:   validConfigTOML,
 				token:        testDryRunToken,
 				highlightErr: map[string]error{dryRunBookNew.ID: errSourceFormatBook},
 				closeErr:     closeErr,
-				wantCode:     7,
+				wantCode:     8,
 				wantStderr: func(config.Paths) string {
-					return "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n"
+					return "partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (unexpected notebook structure)\n"
 				},
 				wantRequests: slices.Concat(initialReadRequests, initialApplyRequestsNewBookFailed),
 			},
@@ -585,11 +587,11 @@ func TestSyncInitial(t *testing.T) {
 				wantStderr: wantInitialPrompt + "local state / ID scheme error: state.db: boom\n",
 			},
 			{
-				name:       "Book 単位の失敗（exit 7）は記録の失敗より優先する",
+				name:       "Book 単位の失敗（exit 8）は記録の失敗より優先する",
 				markErr:    stateErr,
 				books:      slices.Concat(initialBooks, []domain.Book{dryRunBookNoASIN}),
-				wantCode:   7,
-				wantStderr: wantInitialPrompt + "source format error: sync: highlights of 1 of 4 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
+				wantCode:   8,
+				wantStderr: wantInitialPrompt + "partial failure: sync: 1 books were not synced: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n",
 			},
 		}
 		for _, tt := range tests {

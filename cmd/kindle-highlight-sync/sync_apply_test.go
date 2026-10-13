@@ -2,18 +2,22 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/zalando/go-keyring"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/domain"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/secrets"
+	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/source"
 )
 
 // applyAdoptPath は apply の fixture で adoptable になる Book のページを更新する path。
@@ -235,7 +239,7 @@ func TestSyncApply(t *testing.T) {
 		assertRequests(t, requests(), initialApplyRequests...)
 	})
 
-	t.Run("ASIN の無い Book は書き込まず、ambiguous の skip と重なっても exit 7 を返す", func(t *testing.T) {
+	t.Run("ASIN の無い Book は書き込まず、ambiguous の skip と重なっても exit 8 を返す", func(t *testing.T) {
 		setupSyncedXDG(t, validConfigTOML)
 		requests, _ := setupDryRunNotion(t, applyReplies())
 		b := newInitialBrowser()
@@ -243,10 +247,10 @@ func TestSyncApply(t *testing.T) {
 		stubBrowser(t, b, nil)
 
 		code, stdout, stderr := runSyncApply(t)
-		if want := "source format error: sync: highlights of 1 of 5 books could not be listed: " + dryRunBookNoASIN.ID + " (book has no ASIN)\n"; code != 7 || stderr != want {
-			t.Errorf("run(sync) code = %d, stderr = %q, want 7 and %q", code, stderr, want)
+		if want := "partial failure: sync: 2 books were not synced: B000000003 (ambiguous); " + dryRunBookNoASIN.ID + " (book has no ASIN)\n"; code != 8 || stderr != want {
+			t.Errorf("run(sync) code = %d, stderr = %q, want 8 and %q", code, stderr, want)
 		}
-		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "1", "3", "1", "0"), "5", "5"); !reflect.DeepEqual(got, want) {
+		if got, want := planCells(t, stdout), withTargetCount(applyCells("1", "1", "3", "1", "1"), "5", "5"); !reflect.DeepEqual(got, want) {
 			t.Errorf("stdout cells = %q, want %q", got, want)
 		}
 		if got, want := writeRequests(requests()), []string{"PATCH " + applyExactPath, "POST " + testPagesPath, "PATCH " + applyAdoptPath}; !slices.Equal(got, want) {
@@ -307,4 +311,87 @@ func TestSyncApply(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestSyncApplyMixedBookFailures(t *testing.T) {
+	bookIDless := domain.Book{ID: "B000000009", ASIN: "B000000009", Title: "Distinctive Book Idless"}
+	structureErr := fmt.Errorf("source: list highlights %s: page 1: row 1: %w", dryRunBookExact.ID,
+		exitcode.New(exitcode.SourceFormat, fmt.Errorf("highlight id is missing: %w", source.ErrSourceFormat)))
+	idlessErr := fmt.Errorf("source: list highlights %s: page 1: row 1: %w: %w", bookIDless.ID, domain.ErrMissingAnnotationID,
+		exitcode.New(exitcode.SourceFormat, source.ErrSourceFormat))
+
+	tests := []struct {
+		name         string
+		args         []string
+		initial      bool
+		wantFailures string // Book ID と種類の並び（skip → 失敗の順）
+	}{
+		{
+			name: "Initial Sync 済みの sync は Book 一覧の順に失敗を並べる",
+			wantFailures: "5 books were not synced: " + dryRunBookAmbiguous.ID + " (ambiguous); " +
+				dryRunBookExact.ID + " (unexpected notebook structure); " + dryRunBookNew.ID + " (notion write failed); " +
+				dryRunBookNoASIN.ID + " (book has no ASIN); " + bookIDless.ID + " (highlight ID cannot be made)",
+		},
+		{
+			// 予定の算出で失敗に残った Book は実行に渡さず、実行の失敗の前に並べる
+			name:    "Initial Sync は確認の後に残りの Book を同期し、partial として記録する",
+			args:    []string{"--yes"},
+			initial: true,
+			wantFailures: "5 books were not synced: " + dryRunBookAmbiguous.ID + " (ambiguous); " +
+				dryRunBookExact.ID + " (unexpected notebook structure); " + dryRunBookNoASIN.ID + " (book has no ASIN); " +
+				bookIDless.ID + " (highlight ID cannot be made); " + dryRunBookNew.ID + " (notion write failed)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setup := setupSyncedXDG
+			if tt.initial {
+				setup = setupXDG
+			}
+			p := setup(t, validConfigTOML)
+			keyring.MockInit()
+			t.Setenv(secrets.EnvNotionToken, testDryRunToken)
+			reply := dryRunNotionReply(t, applyReplies())
+			var requests []recordedRequest
+			var mu sync.Mutex
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				mu.Lock()
+				requests = append(requests, recordedRequest{method: r.Method, path: r.URL.EscapedPath()})
+				mu.Unlock()
+				if r.Method == http.MethodPatch && r.URL.EscapedPath() == testCreatedBlocksPath {
+					w.WriteHeader(http.StatusInternalServerError) // 作成したページへの追記が 5xx（Book 単位の失敗）
+					_, _ = w.Write([]byte(`{"object":"error","status":500,"code":"internal_server_error","message":"Distinctive Highlight Three"}`))
+					return
+				}
+				_, _ = w.Write([]byte(reply(r.Method, r.URL.EscapedPath(), body)))
+			}))
+			t.Cleanup(srv.Close)
+			stubNewNotionClient(t, srv)
+			stubSyncPrompter(t, "", false)
+			b := newInitialBrowser()
+			// exact は構造の異常、new は書き込みの失敗、adopt は成功、ambiguous は skip、ASIN 無しと Highlight ID が作れない Book も混ぜる
+			b.books = []domain.Book{dryRunBookExact, dryRunBookNew, initialBookAdopt, dryRunBookAmbiguous, dryRunBookNoASIN, bookIDless}
+			b.highlightErr = map[string]error{dryRunBookExact.ID: structureErr, bookIDless.ID: idlessErr}
+			stubBrowser(t, b, nil)
+
+			code, stdout, stderr := runSyncApply(t, tt.args...)
+			want := "partial failure: sync: " + tt.wantFailures + "\n"
+			if code != 8 || !strings.HasSuffix(stderr, want) {
+				t.Errorf("run(sync) code = %d, stderr = %q, want 8 and suffix %q", code, stderr, want)
+			}
+			// 失敗した Book があっても残りの Adopt した Book のページに追記の要求が届く
+			if !slices.Contains(appendRequests(requests), "PATCH "+testInitialAdoptBlocksPath) {
+				t.Errorf("append requests = %q, want to contain PATCH %s", appendRequests(requests), testInitialAdoptBlocksPath)
+			}
+			for _, secret := range []string{"Distinctive", testDryRunToken} {
+				if strings.Contains(stdout+stderr, secret) {
+					t.Errorf("output contains %q: stdout = %q, stderr = %q", secret, stdout, stderr)
+				}
+			}
+			if tt.initial && !initialSyncRecorded(t, p) {
+				t.Error("initial_sync_completed_at not recorded, want recorded as partial")
+			}
+		})
+	}
 }

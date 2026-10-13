@@ -245,7 +245,7 @@ func TestSyncDryRun(t *testing.T) {
 		}
 	})
 
-	t.Run("ASIN の無い Book は Highlight を取らずに失敗として数え、残りの Book の予定を出して exit 7 で終わる", func(t *testing.T) {
+	t.Run("ASIN の無い Book は Highlight を取らずに失敗として数え、残りの Book の予定を出して exit 8 で終わる", func(t *testing.T) {
 		summary := func(exact, newBooks, highlights, targets string) [][]string {
 			return [][]string{
 				{},
@@ -276,7 +276,7 @@ func TestSyncDryRun(t *testing.T) {
 					{dryRunBookNew.Title, "none", "-", "create + append", "1"},
 				}, summary("1", "1", "2", "3 of 3")...), // exact の 2 件のうち Sync Marker で既知の 1 件を除き、新規の 1 件を足す
 				wantHLBooks:  []domain.Book{dryRunBookExact, dryRunBookNew},
-				wantStderr:   "source format error: sync: highlights of 1 of 3 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantStderr:   "partial failure: sync: 1 books were not synced: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
 				wantRequests: []string{"POST " + testDryRunQueryPath, "GET " + testDryRunBlocksPath},
 			},
 			{
@@ -284,7 +284,7 @@ func TestSyncDryRun(t *testing.T) {
 				books:        []domain.Book{dryRunBookNoASIN},
 				wantCells:    append([][]string{header}, summary("0", "0", "0", "1 of 1")...),
 				wantHLBooks:  nil,
-				wantStderr:   "source format error: sync: highlights of 1 of 1 books could not be listed: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
+				wantStderr:   "partial failure: sync: 1 books were not synced: b1-0123456789abcdef0123456789abcdef (book has no ASIN)\n",
 				wantRequests: nil,
 			},
 		}
@@ -297,8 +297,8 @@ func TestSyncDryRun(t *testing.T) {
 				stubBrowser(t, b, nil)
 
 				code, stdout, stderr := runSyncDryRun(t)
-				if code != 7 {
-					t.Errorf("run(sync --dry-run) = %d, want 7 (stderr = %q)", code, stderr)
+				if code != 8 {
+					t.Errorf("run(sync --dry-run) = %d, want 8 (stderr = %q)", code, stderr)
 				}
 				if stderr != tt.wantStderr {
 					t.Errorf("stderr = %q, want %q", stderr, tt.wantStderr)
@@ -316,7 +316,7 @@ func TestSyncDryRun(t *testing.T) {
 		}
 	})
 
-	t.Run("予定の算出で 1 冊の Highlight のページだけが構造の異常なら、その Book を除いた予定を出して exit 7 で終わる", func(t *testing.T) {
+	t.Run("予定の算出で 1 冊の Highlight のページだけが構造の異常なら、その Book を除いた予定を出して exit 8 で終わる", func(t *testing.T) {
 		header := []string{"Kindle Book", "Match Status", "Matched Notion Page", "Action", "Highlights to append"}
 		tests := []struct {
 			name         string
@@ -339,7 +339,7 @@ func TestSyncDryRun(t *testing.T) {
 					{"Highlights to append", "1"},
 					{"Target books", "3 of 3"},
 				},
-				wantStderr: "source format error: sync: highlights of 1 of 3 books could not be listed: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
+				wantStderr: "partial failure: sync: 1 books were not synced: " + dryRunBookNew.ID + " (unexpected notebook structure)\n",
 			},
 		}
 		for _, tt := range tests {
@@ -351,8 +351,8 @@ func TestSyncDryRun(t *testing.T) {
 				stubBrowser(t, b, nil)
 
 				code, stdout, stderr := runSyncDryRun(t)
-				if code != 7 {
-					t.Errorf("run(sync --dry-run) = %d, want 7 (stderr = %q)", code, stderr)
+				if code != 8 {
+					t.Errorf("run(sync --dry-run) = %d, want 8 (stderr = %q)", code, stderr)
 				}
 				if stderr != tt.wantStderr {
 					t.Errorf("stderr = %q, want %q", stderr, tt.wantStderr)

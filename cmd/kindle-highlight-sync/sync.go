@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strings"
+	"slices"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -36,38 +36,6 @@ var checkAuth = func(ctx context.Context, b browser) error {
 
 // newSyncPrompter は Initial Sync の確認の入出力を作る。テストは入力を差し替える。
 var newSyncPrompter = newPrompter
-
-// bookFailureKind は Book 単位の失敗の種類。Book ID と一緒に標準エラーに出すので、Title や Highlight の本文・Note は持たない（仕様書 §74）。
-type bookFailureKind string
-
-const (
-	bookFailureSourceFormat bookFailureKind = "unexpected notebook structure" // その Book の Highlight のページだけが構造の異常（§55 / §72）
-	bookFailureNoASIN       bookFailureKind = "book has no ASIN"              // ASIN が無く Highlight のページを開けない Book（Book ID は §13 の b1-）
-)
-
-// bookFailure は Highlight を取れなかった 1 冊の Book。
-type bookFailure struct {
-	BookID string
-	Kind   bookFailureKind
-}
-
-// booksFailedError は Book 単位の失敗を集めたもの。残りの Book を取り終えてから返す。
-type booksFailedError struct {
-	failed []bookFailure
-	books  int // 取得を試みた Book の総数
-}
-
-func (e *booksFailedError) Error() string {
-	var b strings.Builder
-	fmt.Fprintf(&b, "sync: highlights of %d of %d books could not be listed:", len(e.failed), e.books)
-	for i, f := range e.failed {
-		if i > 0 {
-			b.WriteString(";")
-		}
-		fmt.Fprintf(&b, " %s (%s)", f.BookID, f.Kind)
-	}
-	return b.String()
-}
 
 // syncBody は排他の内側で行う sync の処理。Notebook 到達後に Amazon の認証を確かめ、Book 一覧を最後のページまで取得し、Book ごとに全 Highlight を取得して追記する。
 // a.dryRun なら Highlight の取得は照合（BuildPlan）の中で 1 回だけ行い、予定の表を a.out に出して Notion と State は書かない（§63）。
@@ -118,7 +86,7 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if err != nil {
 		return err
 	}
-	// 対象の選択は dry-run の分岐と ASIN の無い Book の除外より前に 1 回だけ行う（§53 / §54）。照合（FindBook）が対象外の Book まで走らないようにする
+	// 対象の選択は dry-run の分岐より前に 1 回だけ行う（§53 / §54）。照合（FindBook）が対象外の Book まで走らないようにする
 	total := len(books)
 	books, err = selectTargets(ctx, a, books)
 	if err != nil {
@@ -131,16 +99,13 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	if err != nil {
 		return err // state.db を読めない失敗は exitcode.LocalState（6）で包まれている
 	}
+	var plan syncengine.Plan // Initial Sync で確認した予定。その失敗は実行の結果に合流する
 	if !synced {
 		// Initial Sync（§47）。実行の取得には予定を流用せず Highlight を予定と実行で 1 回ずつ取る。
-		// 予定の算出で Highlight を取れなかった Book があれば、確認の前に exit 7 で止める。ApplyBooks が同じ失敗を見つける前に Notion へ書くのを防ぐ。
-		// 予定から除いた ASIN の無い Book は実行でも同じ失敗に数えるので、ここでは捨てる
-		plan, _, err := buildSyncPlan(ctx, a, books, b)
+		// 予定の算出で失敗に残った Book は確認した件数の外なので、実行には渡さず（applyBooks）、失敗として実行の結果に合流させる
+		plan, err = buildSyncPlan(ctx, a, books, b)
 		if err != nil {
 			return err
-		}
-		if failed := planFailures(plan); len(failed) > 0 {
-			return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
 		}
 		if err := confirmInitialSync(a.prompt, plan.Summary, a.prompt.interactive(), a.yes); err != nil {
 			return err
@@ -150,27 +115,13 @@ var syncBody = func(ctx context.Context, a *app, headed bool) (err error) {
 	// ページが決まった Book には既知を除いた Highlight を追記する（§51 / §24）。Highlight は ApplyBooks が Book ごとに取る。
 	// 取得の失敗の仕分けは ApplyBooks に任せる。1 冊だけの構造の異常と Highlight ID が作れない失敗は Failed に載って続き、
 	// 全 Book に共通の枠の異常（§73）・ブラウザの失敗・ctx の取消と期限切れ・ローカル状態の不整合は種類を変えずにここへ返る
-	applied, noASIN, err := applyBooks(ctx, a, books, total, b, startedAt)
+	applied, err := applyBooks(ctx, a, books, plan.Failed, total, b, startedAt)
 	if err != nil {
 		return err
 	}
 	// 確認を通過して取得を終えた run は、success でも Book 単位の失敗（partial、§72）でも閉じたあとに記録する（上の defer）。
 	// 全 Book に共通の失敗はここに届かず記録しない
 	record = !synced
-	// 取得に失敗した Book と ASIN の無い Book（exit 7）、skip と書き込み・追記の失敗（exit 8）を分け、両方あれば exit 7 を返す
-	failed := noASIN
-	var written []syncengine.FailedBook
-	for _, f := range applied.Failed {
-		if f.Kind == syncengine.FailureNotebookStructure || f.Kind == syncengine.FailureHighlightID {
-			failed = append(failed, bookFailure{BookID: f.BookID, Kind: bookFailureSourceFormat})
-			continue
-		}
-		written = append(written, f)
-	}
-	if len(failed) > 0 {
-		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
-	}
-	applied.Failed = written
 	return applied.PartialFailure()
 }
 
@@ -188,25 +139,27 @@ func selectTargets(ctx context.Context, a *app, books []domain.Book) ([]domain.B
 	return syncengine.SelectTargets(books, lastSynced, a.full), nil
 }
 
-// applyBooks は ASIN の無い Book を失敗に数えて除き、残りの Book ごとに作成・Adopt・追記を実行し、件数と対象の数（books の数と全 Book の数 total）を a.out に出す。
+// applyBooks は planFailed（予定の算出で失敗に残った Book）を除いた Book ごとに作成・Adopt・追記を実行し、件数と対象の数（books の数と全 Book の数 total）を a.out に出す。
+// ASIN の無い Book の失敗は ApplyBooks が数える。planFailed の Book は実行せず、結果の Failed の先頭に合流させる。
 // 同期先の組み立て（exit 3）と照合・書き込みの fatal な失敗（exit 4）、全 Book に共通の取得の失敗は種類を変えずに返す。
-// skip・Book 単位の失敗は結果に残し、呼び出し側が exit 7 / exit 8 に仕分ける。
-func applyBooks(ctx context.Context, a *app, books []domain.Book, total int, src browser, startedAt time.Time) (syncengine.ApplyResult, []bookFailure, error) {
+// skip・Book 単位の失敗は結果に残し、呼び出し側が PartialFailure（exit 8）にする。
+func applyBooks(ctx context.Context, a *app, books []domain.Book, planFailed []syncengine.FailedBook, total int, src browser, startedAt time.Time) (syncengine.ApplyResult, error) {
 	dst, err := newDestination(a)
 	if err != nil {
-		return syncengine.ApplyResult{}, nil, err
+		return syncengine.ApplyResult{}, err
 	}
-	var noASIN []bookFailure
+	failedIDs := make(map[string]bool, len(planFailed))
+	for _, f := range planFailed {
+		failedIDs[f.BookID] = true
+	}
 	targets := make([]domain.Book, 0, len(books))
 	for _, book := range books {
-		if book.ASIN == "" {
-			// Highlight のページは ASIN でしか開けない。黙って飛ばすと取りこぼしに気づけないので失敗に数える
-			noASIN = append(noASIN, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
-			continue
+		if !failedIDs[book.ID] {
+			targets = append(targets, book)
 		}
-		targets = append(targets, book)
 	}
 	result, err := syncengine.ApplyBooks(ctx, targets, src, dst, a.store, startedAt)
+	result.Failed = append(slices.Clone(planFailed), result.Failed...)
 	// fatal な失敗で止まっても、そこまでに書いた分は Notion に残るので件数を出してから error を返す
 	if werr := writeApplyResult(a.out, result); err == nil {
 		err = werr
@@ -214,14 +167,14 @@ func applyBooks(ctx context.Context, a *app, books []domain.Book, total int, src
 	if werr := writeTargetCount(a.out, len(books), total); err == nil {
 		err = werr
 	}
-	return result, noASIN, err
+	return result, err
 }
 
 // writeDryRunPlan は dry-run の予定の表と summary を a.out に出す（§63 / §64）。
-// 予定を組めなければ（exit 3 / exit 4）種類を変えずに返して表は出さない。ASIN の無い Book があれば、
-// 残りの Book の予定を出したあとに SourceFormat（exit 7）で終わる（§72）。
+// 予定を組めなければ（exit 3 / exit 4）種類を変えずに返して表は出さない。ASIN の無い Book か Highlight の取得が失敗した Book があれば、
+// 残りの Book の予定を出したあとに PartialFailure（exit 8）で終わる（§72）。
 func writeDryRunPlan(ctx context.Context, a *app, books []domain.Book, total int, src browser) error {
-	plan, failed, err := buildSyncPlan(ctx, a, books, src)
+	plan, err := buildSyncPlan(ctx, a, books, src)
 	if err != nil {
 		return err
 	}
@@ -231,48 +184,20 @@ func writeDryRunPlan(ctx context.Context, a *app, books []domain.Book, total int
 	if err := writeTargetCount(a.out, len(books), total); err != nil {
 		return err
 	}
-	if len(failed) > 0 {
-		return exitcode.New(exitcode.SourceFormat, &booksFailedError{failed: failed, books: len(books)})
+	if len(plan.Failed) > 0 {
+		return syncengine.NewFailedBooksError(plan.Failed)
 	}
 	return nil
 }
 
-// buildSyncPlan は Book を Notion と照合して予定を組み、予定から除いた Book を失敗として返す。
-// ASIN の無い Book は Highlight のページを開けないので、通常の sync と同じく bookFailureNoASIN に集めて照合から除く。
-// BuildPlan が Plan.Failed に残した Book も合流させる（ASIN 無しは bookFailureNoASIN、それ以外は bookFailureSourceFormat）。
+// buildSyncPlan は Book を Notion と照合して予定を組む。ASIN の無い Book と 1 冊の取得の失敗は BuildPlan が Plan.Failed に残す。
 // 同期先の組み立て（exit 3）と照合（exit 4）の失敗は種類を変えずに返す。
-func buildSyncPlan(ctx context.Context, a *app, books []domain.Book, src browser) (syncengine.Plan, []bookFailure, error) {
+func buildSyncPlan(ctx context.Context, a *app, books []domain.Book, src browser) (syncengine.Plan, error) {
 	dst, err := newDestination(a)
 	if err != nil {
-		return syncengine.Plan{}, nil, err
+		return syncengine.Plan{}, err
 	}
-	var failed []bookFailure
-	planned := make([]domain.Book, 0, len(books))
-	for _, book := range books {
-		if book.ASIN == "" {
-			failed = append(failed, bookFailure{BookID: book.ID, Kind: bookFailureNoASIN})
-			continue
-		}
-		planned = append(planned, book)
-	}
-	plan, err := syncengine.BuildPlan(ctx, planned, src, dst)
-	if err != nil {
-		return syncengine.Plan{}, nil, err
-	}
-	return plan, append(failed, planFailures(plan)...), nil
-}
-
-// planFailures は BuildPlan が Plan.Failed に残した Book を bookFailure にする（ASIN 無しは bookFailureNoASIN、それ以外は bookFailureSourceFormat）。
-func planFailures(plan syncengine.Plan) []bookFailure {
-	failed := make([]bookFailure, 0, len(plan.Failed))
-	for _, f := range plan.Failed {
-		kind := bookFailureSourceFormat
-		if f.Kind == syncengine.FailureNoASIN {
-			kind = bookFailureNoASIN
-		}
-		failed = append(failed, bookFailure{BookID: f.BookID, Kind: kind})
-	}
-	return failed
+	return syncengine.BuildPlan(ctx, books, src, dst)
 }
 
 func newSyncCmd(a *app) *cobra.Command {
