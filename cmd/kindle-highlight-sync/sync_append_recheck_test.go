@@ -241,11 +241,11 @@ func TestSyncAppendRecheck(t *testing.T) {
 				t.Errorf("stdout cells = %q, want %q", got, want)
 			}
 			if got := n.appendCalls[recheckPageA]; got != tt.wantCallsA {
-				t.Errorf("append calls of A = %d, want %d", got, tt.wantCallsA)
+				t.Errorf("n.appendCalls[recheckPageA] = %d, want %d", got, tt.wantCallsA)
 			}
 			_, highlights := newRecheckFixture()
 			if got := len(n.blocks[recheckPageA]); got != tt.wantBlocksA {
-				t.Errorf("len(blocks of A) = %d, want %d", got, tt.wantBlocksA)
+				t.Errorf("len(n.blocks[recheckPageA]) = %d, want %d", got, tt.wantBlocksA)
 			}
 			if tt.wantBlocksA > 0 {
 				for _, h := range highlights[recheckBookAID] {
@@ -255,15 +255,16 @@ func TestSyncAppendRecheck(t *testing.T) {
 				}
 			}
 			if got := len(n.blocks[recheckPageB]); got != tt.wantBlocksB {
-				t.Errorf("len(blocks of B) = %d, want %d", got, tt.wantBlocksB)
+				t.Errorf("len(n.blocks[recheckPageB]) = %d, want %d", got, tt.wantBlocksB)
 			}
 			if got, want := markerCount(n.blocks[recheckPageB], recheckHighlightB), tt.wantBlocksB; got != want {
 				t.Errorf("markerCount(%s) = %d, want %d", recheckHighlightB, got, want)
 			}
 			// 標準出力は件数だけで、Highlight の本文・Note・token・Sync Marker は出さない
-			for _, secret := range []string{"Distinctive", testDryRunToken, "khs:"} {
-				if strings.Contains(stdout+stderr, secret) {
-					t.Errorf("output contains %q: stdout = %q, stderr = %q", secret, stdout, stderr)
+			// 失敗メッセージに出力そのものは入れない（token が漏れうる）
+			for _, secret := range []struct{ name, value string }{{"Highlight の本文", "Distinctive"}, {"token", testDryRunToken}, {"Sync Marker", "khs:"}} {
+				if got := strings.Contains(stdout+stderr, secret.value); got {
+					t.Errorf("strings.Contains(stdout+stderr, %s) = %v, want false", secret.name, got)
 				}
 			}
 		})

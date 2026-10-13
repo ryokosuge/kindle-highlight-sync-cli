@@ -186,43 +186,56 @@ func recheckCells(cells [][]string, rechecked, resent string) [][]string {
 }
 
 func TestWriteApplyResult(t *testing.T) {
-	t.Run("作成・Adopt・追記した Highlight・skip・失敗の件数だけを出し、Book ID は出さない", func(t *testing.T) {
-		r := syncengine.ApplyResult{
-			Created:  []string{"B000000001", "B000000002"},
-			Adopted:  []string{"B000000003"},
-			Exact:    []string{"B000000004"},
-			Skipped:  []string{"B000000005"},
-			Appended: 7,
-			Failed:   []syncengine.FailedBook{{BookID: "B000000006", Kind: syncengine.FailureNotionWrite}, {BookID: "B000000007", Kind: syncengine.FailureNotionWrite}},
-		}
-		var buf bytes.Buffer
-		if err := writeApplyResult(&buf, r); err != nil {
-			t.Fatal(err)
-		}
-		if got, want := planCells(t, buf.String()), applyCells("2", "1", "7", "1", "2"); !reflect.DeepEqual(got, want) {
-			t.Errorf("writeApplyResult() cells = %q, want %q", got, want)
-		}
-		if strings.Contains(buf.String(), "B0000") {
-			t.Errorf("writeApplyResult() = %q, want no Book ID", buf.String())
-		}
-	})
-
-	t.Run("確かめ直した Book があれば、その数と送り直した Highlight の数を足して出す", func(t *testing.T) {
-		r := syncengine.ApplyResult{Appended: 3, Rechecked: 2, Resent: 5}
-		var buf bytes.Buffer
-		if err := writeApplyResult(&buf, r); err != nil {
-			t.Fatal(err)
-		}
-		if got, want := planCells(t, buf.String()), recheckCells(applyCells("0", "0", "3", "0", "0"), "2", "5"); !reflect.DeepEqual(got, want) {
-			t.Errorf("writeApplyResult() cells = %q, want %q", got, want)
-		}
-	})
-
-	t.Run("書き込み先が失敗したら error を返す", func(t *testing.T) {
-		if err := writeApplyResult(&failingWriter{err: errors.New("boom")}, syncengine.ApplyResult{}); err == nil {
-			t.Error("writeApplyResult() error = nil, want error")
-		}
-	})
+	tests := []struct {
+		name          string
+		result        syncengine.ApplyResult
+		writeErr      error      // nil 以外なら書き込み先がこの error で失敗する
+		wantCells     [][]string // writeErr が nil のとき、出力が持つ行
+		wantNoBookIDs bool       // 出力に Book ID（B0000 始まり）を含まない
+	}{
+		{
+			name: "作成・Adopt・追記した Highlight・skip・失敗の件数だけを出し、Book ID は出さない",
+			result: syncengine.ApplyResult{
+				Created:  []string{"B000000001", "B000000002"},
+				Adopted:  []string{"B000000003"},
+				Exact:    []string{"B000000004"},
+				Skipped:  []string{"B000000005"},
+				Appended: 7,
+				Failed:   []syncengine.FailedBook{{BookID: "B000000006", Kind: syncengine.FailureNotionWrite}, {BookID: "B000000007", Kind: syncengine.FailureNotionWrite}},
+			},
+			wantCells:     applyCells("2", "1", "7", "1", "2"),
+			wantNoBookIDs: true,
+		},
+		{
+			name:      "確かめ直した Book があれば、その数と送り直した Highlight の数を足して出す",
+			result:    syncengine.ApplyResult{Appended: 3, Rechecked: 2, Resent: 5},
+			wantCells: recheckCells(applyCells("0", "0", "3", "0", "0"), "2", "5"),
+		},
+		{
+			name:     "書き込み先が失敗したら error を返す",
+			writeErr: errors.New("boom"),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.writeErr != nil {
+				if err := writeApplyResult(&failingWriter{err: tt.writeErr}, tt.result); err == nil {
+					t.Error("writeApplyResult() error = nil, want error")
+				}
+				return
+			}
+			var buf bytes.Buffer
+			if err := writeApplyResult(&buf, tt.result); err != nil {
+				t.Fatal(err)
+			}
+			if got := planCells(t, buf.String()); !reflect.DeepEqual(got, tt.wantCells) {
+				t.Errorf("writeApplyResult() cells = %q, want %q", got, tt.wantCells)
+			}
+			if got := strings.Contains(buf.String(), "B0000"); tt.wantNoBookIDs && got {
+				t.Errorf("strings.Contains(writeApplyResult(), %q) = %v, want false", "B0000", got)
+			}
+		})
+	}
 }
 
 // withTargetCount は cells の末尾に writeTargetCount が出す「対象の数 of 全 Book の数」の行を足す。
