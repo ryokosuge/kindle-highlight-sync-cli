@@ -26,14 +26,23 @@ func appendOnce(c *Client, ctx context.Context) error {
 
 func TestOutcomeUnknown(t *testing.T) {
 	tests := []struct {
+		name   string
 		status int
 		want   bool
 	}{
-		{429, true}, {529, true}, {500, true}, {502, true}, {503, true}, {504, true},
-		{400, false}, {401, false}, {403, false}, {404, false},
+		{"429 は結果不明", 429, true},
+		{"529 は結果不明", 529, true},
+		{"500 は結果不明", 500, true},
+		{"502 は結果不明", 502, true},
+		{"503 は結果不明", 503, true},
+		{"504 は結果不明", 504, true},
+		{"400 は結果不明でない", 400, false},
+		{"401 は結果不明でない", 401, false},
+		{"403 は結果不明でない", 403, false},
+		{"404 は結果不明でない", 404, false},
 	}
 	for _, tt := range tests {
-		t.Run(strconv.Itoa(tt.status), func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			client := newTestClient(t, statusHandler(tt.status, ""))
 			err := appendOnce(client, context.Background())
 			assertNotionError(t, err)
@@ -113,6 +122,19 @@ func TestRetryAfter(t *testing.T) {
 		d, ok := RetryAfter(appendOnce(client, context.Background()))
 		if !ok || d != 7*time.Second {
 			t.Errorf("RetryAfter = %s, %v, want 7s, true", d, ok)
+		}
+	})
+	t.Run("Duration に収まる最大の秒数の Retry-After", func(t *testing.T) {
+		client := newTestClient(t, statusHandler(429, strconv.Itoa(maxDurationSeconds)))
+		d, ok := RetryAfter(appendOnce(client, context.Background()))
+		if !ok || d != time.Duration(maxDurationSeconds)*time.Second || d < 0 {
+			t.Errorf("RetryAfter = %s, %v, want max, true", d, ok)
+		}
+	})
+	t.Run("Duration に収まらない秒数の Retry-After は取り出せない", func(t *testing.T) {
+		client := newTestClient(t, statusHandler(429, strconv.Itoa(maxDurationSeconds+1)))
+		if d, ok := RetryAfter(appendOnce(client, context.Background())); ok {
+			t.Errorf("RetryAfter = %s, true, want false", d)
 		}
 	})
 	t.Run("Retry-After が無い 429", func(t *testing.T) {

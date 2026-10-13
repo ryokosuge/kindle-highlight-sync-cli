@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -21,6 +22,9 @@ const (
 	defaultBaseURL = "https://api.notion.com"
 	notionVersion  = "2026-03-11"
 	requestTimeout = 30 * time.Second
+
+	// maxDurationSeconds は time.Duration に収まる最大の秒数。これを超える Retry-After は換算で溢れる。
+	maxDurationSeconds = int(math.MaxInt64 / int64(time.Second))
 )
 
 // Client は Notion API を呼ぶクライアント。token は Authorization ヘッダにだけ使い、error には出さない。
@@ -179,7 +183,7 @@ func (c *Client) request(ctx context.Context, method, path string, body, v any, 
 
 		statusErr := statusError(resp.StatusCode, respBody)
 		if resp.StatusCode == http.StatusTooManyRequests {
-			if secs, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok {
+			if secs, ok := parseRetryAfter(resp.Header.Get("Retry-After")); ok && secs <= maxDurationSeconds {
 				statusErr.retryAfter, statusErr.hasRetryAfter = time.Duration(secs)*time.Second, true
 			}
 		}
