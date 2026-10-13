@@ -1204,10 +1204,10 @@ func TestApplyBooksRecheck(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var sleeps []time.Duration
-			oldSleep, oldJitter := recheckSleep, recheckJitter
-			recheckSleep = func(_ context.Context, d time.Duration) error { sleeps = append(sleeps, d); return nil }
+			oldSleep, oldJitter := RecheckSleep, recheckJitter
+			RecheckSleep = func(_ context.Context, d time.Duration) error { sleeps = append(sleeps, d); return nil }
 			recheckJitter = func() time.Duration { return 0 }
-			t.Cleanup(func() { recheckSleep, recheckJitter = oldSleep, oldJitter })
+			t.Cleanup(func() { RecheckSleep, recheckJitter = oldSleep, oldJitter })
 
 			dst := &recheckDestination{
 				fakeDestination: &fakeDestination{matches: matches},
@@ -1252,9 +1252,9 @@ func TestApplyBooksRecheck(t *testing.T) {
 
 func TestApplyBooksRecheckCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	oldSleep := recheckSleep
-	recheckSleep = sleepContext
-	t.Cleanup(func() { recheckSleep = oldSleep })
+	oldSleep := RecheckSleep
+	RecheckSleep = sleepContext
+	t.Cleanup(func() { RecheckSleep = oldSleep })
 
 	books := []domain.Book{{ID: "book-a", ASIN: "ASIN-a"}}
 	dst := &recheckDestination{

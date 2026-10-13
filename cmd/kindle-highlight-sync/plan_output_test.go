@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -177,6 +178,13 @@ func applyCells(created, adopted, appended, skipped, failed string) [][]string {
 	return [][]string{{"Created", created}, {"Adopted", adopted}, {"Appended highlights", appended}, {"Skipped (ambiguous)", skipped}, {"Failed", failed}}
 }
 
+// recheckCells は applyCells の Appended highlights の次の行に、確かめ直した Book の数と送り直した Highlight の数の行を足す。
+func recheckCells(cells [][]string, rechecked, resent string) [][]string {
+	out := slices.Clone(cells[:3])
+	out = append(out, []string{"Rechecked books", rechecked}, []string{"Resent highlights", resent})
+	return append(out, cells[3:]...)
+}
+
 func TestWriteApplyResult(t *testing.T) {
 	t.Run("作成・Adopt・追記した Highlight・skip・失敗の件数だけを出し、Book ID は出さない", func(t *testing.T) {
 		r := syncengine.ApplyResult{
@@ -196,6 +204,17 @@ func TestWriteApplyResult(t *testing.T) {
 		}
 		if strings.Contains(buf.String(), "B0000") {
 			t.Errorf("writeApplyResult() = %q, want no Book ID", buf.String())
+		}
+	})
+
+	t.Run("確かめ直した Book があれば、その数と送り直した Highlight の数を足して出す", func(t *testing.T) {
+		r := syncengine.ApplyResult{Appended: 3, Rechecked: 2, Resent: 5}
+		var buf bytes.Buffer
+		if err := writeApplyResult(&buf, r); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := planCells(t, buf.String()), recheckCells(applyCells("0", "0", "3", "0", "0"), "2", "5"); !reflect.DeepEqual(got, want) {
+			t.Errorf("writeApplyResult() cells = %q, want %q", got, want)
 		}
 	})
 

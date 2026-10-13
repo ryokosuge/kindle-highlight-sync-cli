@@ -48,9 +48,9 @@ const (
 	maxRecheckRetryAfter = 60 * time.Second
 )
 
-// recheckSleep と recheckJitter は確かめ直しの前の待ちで、テストで差し替える。
+// RecheckSleep と recheckJitter は確かめ直しの前の待ち。cmd のテストも待ちを 0 にするため RecheckSleep を差し替える。
 var (
-	recheckSleep  = sleepContext
+	RecheckSleep  = sleepContext
 	recheckJitter = func() time.Duration { return rand.N(time.Second) }
 )
 
@@ -275,7 +275,7 @@ func (r *ApplyResult) appendWithRecheck(ctx context.Context, remote destination.
 		if !ok {
 			break
 		}
-		if serr := recheckSleep(ctx, d); serr != nil {
+		if serr := RecheckSleep(ctx, d); serr != nil {
 			return confirmed, serr
 		}
 		if !rechecked {
