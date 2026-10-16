@@ -30,6 +30,68 @@ func TestFieldRequired(t *testing.T) {
 	}
 }
 
+func TestFields(t *testing.T) {
+	want := []Field{FieldTitle, FieldKindleID, FieldAuthor, FieldASIN, FieldLastAnnotatedAt}
+
+	if got := Fields(); !slices.Equal(got, want) {
+		t.Errorf("Fields() = %v, want %v", got, want)
+	}
+
+	got := Fields()
+	got[0] = FieldASIN
+	if again := Fields(); !slices.Equal(again, want) {
+		t.Errorf("書き換え後の Fields() = %v, want %v", again, want)
+	}
+}
+
+func TestFieldAccessors(t *testing.T) {
+	tests := []struct {
+		name        string
+		field       Field
+		typ         string
+		defaultName string
+		purpose     string
+	}{
+		{
+			name: "タイトル", field: FieldTitle, typ: "title", defaultName: "",
+			purpose: "Book のタイトル",
+		},
+		{
+			name: "Kindle ID", field: FieldKindleID, typ: "rich_text", defaultName: "Kindle ID",
+			purpose: "Book ID（ASIN、取れなければ b1- で始まる代替値）。同期先のページを見分けるのに使う",
+		},
+		{
+			name: "著者", field: FieldAuthor, typ: "rich_text", defaultName: "Author",
+			purpose: "Book の著者",
+		},
+		{
+			name: "ASIN", field: FieldASIN, typ: "rich_text", defaultName: "ASIN",
+			purpose: "Book の ASIN",
+		},
+		{
+			name: "最終注釈日時", field: FieldLastAnnotatedAt, typ: "date", defaultName: "Last Annotated At",
+			purpose: "Kindle Notebook で最後に Highlight や Note を付けた日時",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.field.Type(); got != tt.typ {
+				t.Errorf("Type() = %q, want %q", got, tt.typ)
+			}
+			if got := tt.field.DefaultName(); got != tt.defaultName {
+				t.Errorf("DefaultName() = %q, want %q", got, tt.defaultName)
+			}
+			if got := tt.field.Purpose(); got != tt.purpose {
+				t.Errorf("Purpose() = %q, want %q", got, tt.purpose)
+			}
+			if tt.field.Purpose() == "" {
+				t.Errorf("Purpose() = %q, want 空でない", tt.field.Purpose())
+			}
+		})
+	}
+}
+
 func TestCandidates(t *testing.T) {
 	tests := []struct {
 		name  string
