@@ -1,6 +1,7 @@
 package notion
 
 import (
+	"slices"
 	"strings"
 	"unicode"
 
@@ -54,6 +55,38 @@ var defaultNames = map[Field][]string{
 	FieldAuthor:          {"Author", "著者"},
 	FieldASIN:            {"ASIN"},
 	FieldLastAnnotatedAt: {"Last Annotated At", "Last Annotated"},
+}
+
+// purposes は項目の用途の説明。
+var purposes = map[Field]string{
+	FieldTitle:           "Book のタイトル",
+	FieldKindleID:        "Book ID（ASIN、取れなければ b1- で始まる代替値）。同期先のページを見分けるのに使う",
+	FieldAuthor:          "Book の著者",
+	FieldASIN:            "Book の ASIN",
+	FieldLastAnnotatedAt: "Kindle Notebook で最後に Highlight や Note を付けた日時",
+}
+
+// Fields は §45 の順の Field を返す。戻り値を書き換えても内部の順は変わらない。
+func Fields() []Field {
+	return slices.Clone(fields)
+}
+
+// Type は §45 の Notion の型名（title / rich_text / date）を返す。
+func (f Field) Type() string {
+	return fieldTypes[f]
+}
+
+// DefaultName は既定の Property 名を返す。title のように既定名を持たない Field は空。
+func (f Field) DefaultName() string {
+	if names := defaultNames[f]; len(names) > 0 {
+		return names[0]
+	}
+	return ""
+}
+
+// Purpose は項目の用途の説明を返す。
+func (f Field) Purpose() string {
+	return purposes[f]
 }
 
 // Required は title と kindle_id で true（§45）。
