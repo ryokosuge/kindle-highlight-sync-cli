@@ -64,11 +64,15 @@ func CheckMapping(props []Property) MappingCheck {
 func (c MappingCheck) Err() error {
 	var parts []string
 	for _, problem := range c.Missing {
-		parts = append(parts, fmt.Sprintf("missing property for %s: need a property of type %s", problem.Field, problem.Want))
+		if name := problem.Field.DefaultName(); name != "" {
+			parts = append(parts, fmt.Sprintf("Notion で Property「%s」を型 %s で足してください", name, problem.Want))
+		} else {
+			parts = append(parts, fmt.Sprintf("Notion で型 %s の Property を足してください（名前は問いません）", problem.Want))
+		}
 	}
 	for _, problem := range c.Mismatched {
 		property := problem.Property
-		parts = append(parts, fmt.Sprintf("property %q for %s has type %s, want %s", property.Name, problem.Field, property.Type, problem.Want))
+		parts = append(parts, fmt.Sprintf("Notion で Property「%s」の型を %s から %s に直してください", property.Name, property.Type, problem.Want))
 	}
 	if len(parts) == 0 {
 		return nil

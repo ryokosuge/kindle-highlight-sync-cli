@@ -767,28 +767,28 @@ func TestInitErrors(t *testing.T) {
 				args:       []string{"init"},
 				input:      initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n",
 				dataSource: missing,
-				want:       setupGuide() + "Notion token: Notion Database URL or ID: configuration / confirmation required: missing property for kindle_id: need a property of type rich_text\n",
+				want:       setupGuide() + "Notion token: Notion Database URL or ID: configuration / confirmation required: Notion で Property「Kindle ID」を型 rich_text で足してください\n",
 			},
 			{
 				name:       "不足 --yes",
 				args:       []string{"init", "--yes", "--database-id", initDatabaseRawID},
 				token:      initTokenValue,
 				dataSource: missing,
-				want:       "configuration / confirmation required: missing property for kindle_id: need a property of type rich_text\n",
+				want:       "configuration / confirmation required: Notion で Property「Kindle ID」を型 rich_text で足してください\n",
 			},
 			{
 				name:       "型違い interactive",
 				args:       []string{"init"},
 				input:      initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n",
 				dataSource: mismatched,
-				want:       setupGuide() + "Notion token: Notion Database URL or ID: configuration / confirmation required: property \"Kindle ID\" for kindle_id has type number, want rich_text\n",
+				want:       setupGuide() + "Notion token: Notion Database URL or ID: configuration / confirmation required: Notion で Property「Kindle ID」の型を number から rich_text に直してください\n",
 			},
 			{
 				name:       "型違い --yes",
 				args:       []string{"init", "--yes", "--database-id", initDatabaseRawID},
 				token:      initTokenValue,
 				dataSource: mismatched,
-				want:       "configuration / confirmation required: property \"Kindle ID\" for kindle_id has type number, want rich_text\n",
+				want:       "configuration / confirmation required: Notion で Property「Kindle ID」の型を number から rich_text に直してください\n",
 			},
 		}
 		for _, tt := range tests {
