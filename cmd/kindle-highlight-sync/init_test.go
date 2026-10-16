@@ -883,8 +883,60 @@ func TestInitErrors(t *testing.T) {
 			t.Errorf("output contains token: stdout=%q stderr=%q", stdout, stderr)
 		}
 		want := "Notion error: notion: GET /v1/databases/" + initDatabaseID + ": HTTP 401 unauthorized: API token [REDACTED] is invalid.\n"
+		if strings.Contains(stderr, "「接続」") {
+			t.Errorf("stderr = %q, want no connect guide", stderr)
+		}
 		if stderr != want {
 			t.Errorf("stderr = %q, want %q", stderr, want)
+		}
+	})
+
+	t.Run("Database が未接続（404 object_not_found）なら接続の案内を出して exit 3", func(t *testing.T) {
+		notFound := map[string]initResponse{
+			"/v1/databases/" + initDatabaseID: {
+				status: http.StatusNotFound,
+				body:   `{"object":"error","status":404,"code":"object_not_found","message":"Could not find database with ID: ` + initDatabaseID + `."}`,
+			},
+		}
+		tests := []struct {
+			name      string
+			args      []string
+			input     string
+			token     string
+			wantExact bool
+		}{
+			{name: "--yes", args: []string{"init", "--yes", "--database-id", initDatabaseRawID}, token: initTokenValue, wantExact: true},
+			{name: "対話", args: []string{"init"}, input: initTokenValue + "\n" + initDatabaseRawID + "\n"},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				p, _, code, stdout, stderr := runInitTest(t, tt.args, tt.input, tt.token, notFound)
+				if code != 3 {
+					t.Errorf("code = %d, want 3; stderr = %q", code, stderr)
+				}
+				for _, want := range []string{"接続されていないか、Database の URL / ID が違う可能性があります", "「接続」", "Connections", "もう一度 init を実行してください"} {
+					if !strings.Contains(stderr, want) {
+						t.Errorf("stderr = %q, want to contain %q", stderr, want)
+					}
+				}
+				if tt.wantExact {
+					var guide bytes.Buffer
+					printConnectGuide(&guide)
+					want := guide.String() + "configuration / confirmation required: integration が接続されていないか、Database の URL / ID が違います: notion: GET /v1/databases/" + initDatabaseID + ": HTTP 404 object_not_found: Could not find database with ID: " + initDatabaseID + ".\n"
+					if stderr != want {
+						t.Errorf("stderr = %q, want %q", stderr, want)
+					}
+				}
+				if _, err := os.Stat(p.ConfigFile); !errors.Is(err, os.ErrNotExist) {
+					t.Errorf("config exists: %v", err)
+				}
+				if _, err := keyring.Get("kindle-highlight-sync", "notion-token"); !errors.Is(err, keyring.ErrNotFound) {
+					t.Errorf("keyring token error = %v, want not found", err)
+				}
+				if strings.Contains(stdout+stderr, initTokenValue) {
+					t.Errorf("output contains token: stdout=%q stderr=%q", stdout, stderr)
+				}
+			})
 		}
 	})
 
@@ -911,14 +963,17 @@ func TestInitErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("Notion の Data Source エラーは config を作らない", func(t *testing.T) {
+	t.Run("Notion の Data Source エラーは config を作らず接続の案内を出して exit 3", func(t *testing.T) {
 		responses := map[string]initResponse{
 			"/v1/databases/" + initDatabaseID: initDatabaseResponse("Books"),
 			"/v1/data_sources/ds-1":           {status: http.StatusNotFound, body: `{"object":"error","status":404,"code":"object_not_found","message":"Could not find data source."}`},
 		}
 		p, _, code, _, stderr := runInitTest(t, []string{"init", "--yes", "--database-id", initDatabaseRawID}, "", initTokenValue, responses)
-		if code != 4 {
-			t.Errorf("code = %d, want 4", code)
+		if code != 3 {
+			t.Errorf("code = %d, want 3", code)
+		}
+		if !strings.Contains(stderr, "Database の URL / ID が違う可能性があります") || !strings.Contains(stderr, "「接続」") {
+			t.Errorf("stderr = %q, want connect guide", stderr)
 		}
 		if _, err := os.Stat(p.ConfigFile); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("config exists: %v", err)

@@ -90,7 +90,7 @@ func runInit(cmd *cobra.Command, a *app, databaseID string, force, yes bool) err
 	}
 	ds, err := client.RetrieveDataSource(cmd.Context(), ref.ID)
 	if err != nil {
-		return err
+		return initNotionError(cmd, err)
 	}
 	mapping, err := initMapping(cmd.ErrOrStderr(), p, ds, yes)
 	if err != nil {
@@ -167,10 +167,19 @@ func initToken(p *prompter, yes bool) (token string, save bool, err error) {
 	return token, true, nil
 }
 
+// initNotionError は未接続の可能性がある失敗なら案内を出して exit 3 の error にし、それ以外は err をそのまま返す。
+func initNotionError(cmd *cobra.Command, err error) error {
+	if !notion.IsNotShared(err) {
+		return err
+	}
+	printConnectGuide(cmd.ErrOrStderr())
+	return connectRequiredError(err)
+}
+
 func initDataSource(cmd *cobra.Command, client *notion.Client, id string, p *prompter, yes bool) (notion.DataSourceRef, error) {
 	db, err := client.RetrieveDatabase(cmd.Context(), id)
 	if err != nil {
-		return notion.DataSourceRef{}, err
+		return notion.DataSourceRef{}, initNotionError(cmd, err)
 	}
 	switch len(db.DataSources) {
 	case 0:
