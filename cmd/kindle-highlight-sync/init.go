@@ -234,7 +234,7 @@ func initMapping(w io.Writer, p *prompter, ds *notion.DataSource, yes bool) (con
 		for i, option := range options {
 			names[i] = option.Name
 		}
-		i, err := p.choose(string(entry.field), names, def, optional)
+		i, err := p.choose(fieldPrompt(entry.field), names, def, optional)
 		if errors.Is(err, errNoOptions) {
 			return config.Mapping{}, exitcode.New(exitcode.ConfigRequired, fmt.Errorf("%s: %w", entry.field, err))
 		}
@@ -246,6 +246,11 @@ func initMapping(w io.Writer, p *prompter, ds *notion.DataSource, yes bool) (con
 		}
 	}
 	return mapping, nil
+}
+
+// fieldPrompt は対応付けの問いの文言。用途と要る型は notion の定義から引く。
+func fieldPrompt(field notion.Field) string {
+	return fmt.Sprintf("%s: %s（型: %s）", field, field.Purpose(), field.Type())
 }
 
 func printInitSummary(cmd *cobra.Command, path, databaseID, dataSourceName string, mapping config.Mapping, ds *notion.DataSource) {

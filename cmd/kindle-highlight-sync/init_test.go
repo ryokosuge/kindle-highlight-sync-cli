@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -171,6 +172,47 @@ func wantInitSummary(path string) string {
 		"title: Name\nkindle_id: Kindle ID\nauthor: Author\nasin: ASIN\nlast_annotated_at: Last Annotated At\n"
 }
 
+func TestInitFieldPrompt(t *testing.T) {
+	input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
+	_, _, code, _, stderr := runInitTest(t, []string{"init"}, input, "", initRoutes(initDataSourceResponse("ds-1", true, false)))
+	if code != 0 {
+		t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
+	}
+	tests := []struct {
+		name    string
+		key     string
+		purpose string
+		typ     string
+	}{
+		{"title の問いに用途と title 型が含まれる", "title", "Book のタイトル", "title"},
+		{"kindle_id の問いに用途と rich_text 型が含まれる", "kindle_id", "同期先のページを見分けるのに使う", "rich_text"},
+		{"author の問いに用途と rich_text 型が含まれる", "author", "Book の著者", "rich_text"},
+		{"asin の問いに用途と rich_text 型が含まれる", "asin", "Book の ASIN", "rich_text"},
+		{"last_annotated_at の問いに用途と date 型が含まれる", "last_annotated_at", "最後に Highlight や Note を付けた日時", "date"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			question := questionLine(t, stderr, tt.key)
+			if got := strings.Contains(question, tt.purpose); !got {
+				t.Errorf("question %q contains %q = %v, want %v", question, tt.purpose, got, true)
+			}
+			if got := strings.Contains(question, "型: "+tt.typ+"）"); !got {
+				t.Errorf("question %q contains type %q = %v, want %v", question, tt.typ, got, true)
+			}
+		})
+	}
+}
+
+// questionLine は stderr から key の対応付けの問い 1 行を返す。問いは直前の入力待ちの行の末尾に続く。
+func questionLine(t *testing.T, stderr, key string) string {
+	t.Helper()
+	m := regexp.MustCompile(`(?:ID|\]): (` + regexp.QuoteMeta(key) + `: [^\n]*)`).FindStringSubmatch(stderr)
+	if m == nil {
+		t.Fatalf("question for %q in stderr = %q, want a line", key, stderr)
+	}
+	return m[1]
+}
+
 func TestInitInteractive(t *testing.T) {
 	t.Run("token と既定の対応を保存する", func(t *testing.T) {
 		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
@@ -178,11 +220,11 @@ func TestInitInteractive(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 		}
-		wantStderr := setupGuide() + "Notion token: Notion Database URL or ID: title\n" +
-			"  1) Name\nnumber [1]: kindle_id\n" +
-			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\nnumber [3]: author\n" +
-			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [2]: asin\n" +
-			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [1]: last_annotated_at\n" +
+		wantStderr := setupGuide() + "Notion token: Notion Database URL or ID: " + fieldPrompt(notion.FieldTitle) + "\n" +
+			"  1) Name\nnumber [1]: " + fieldPrompt(notion.FieldKindleID) + "\n" +
+			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\nnumber [3]: " + fieldPrompt(notion.FieldAuthor) + "\n" +
+			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [2]: " + fieldPrompt(notion.FieldASIN) + "\n" +
+			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [1]: " + fieldPrompt(notion.FieldLastAnnotatedAt) + "\n" +
 			"  1) Last Annotated At\n  0) do not map\nnumber [1]: "
 		if stderr != wantStderr {
 			t.Errorf("stderr = %q, want %q", stderr, wantStderr)
@@ -322,10 +364,10 @@ func TestInitInteractive(t *testing.T) {
 			"not mapping property \"Author\" to author: type is number, want rich_text\n" +
 			"not mapping property \"ASIN\" to asin: type is select, want rich_text\n" +
 			"not mapping property \"Last Annotated At\" to last_annotated_at: type is rich_text, want date\n" +
-			"title\n  1) Name\nnumber [1]: kindle_id\n" +
-			"  1) Kindle ID\n  2) Last Annotated At\nnumber [1]: author\n" +
-			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: asin\n" +
-			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: last_annotated_at\n" +
+			fieldPrompt(notion.FieldTitle) + "\n  1) Name\nnumber [1]: " + fieldPrompt(notion.FieldKindleID) + "\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\nnumber [1]: " + fieldPrompt(notion.FieldAuthor) + "\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: " + fieldPrompt(notion.FieldASIN) + "\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: " + fieldPrompt(notion.FieldLastAnnotatedAt) + "\n" +
 			"  0) do not map\nnumber [0]: "
 		if stderr != wantStderr {
 			t.Errorf("stderr = %q, want %q", stderr, wantStderr)
