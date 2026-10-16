@@ -3,6 +3,7 @@ package notion
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/exitcode"
@@ -72,12 +73,18 @@ func (c MappingCheck) Err() error {
 	}
 	for _, problem := range c.Mismatched {
 		property := problem.Property
-		parts = append(parts, fmt.Sprintf("Notion で Property「%s」の型を %s から %s に直してください", property.Name, property.Type, problem.Want))
+		parts = append(parts, fmt.Sprintf("Notion で Property「%s」の型を %s から %s に直してください", escapeName(property.Name), property.Type, problem.Want))
 	}
 	if len(parts) == 0 {
 		return nil
 	}
 	return exitcode.New(exitcode.ConfigRequired, errors.New(strings.Join(parts, "; ")))
+}
+
+// escapeName は Property 名の制御文字をエスケープして、文面が 1 行に収まるようにする。
+func escapeName(name string) string {
+	quoted := strconv.Quote(name)
+	return quoted[1 : len(quoted)-1]
 }
 
 // SkippedLines は Skipped を 1 件 1 行の文面にして返す。

@@ -146,6 +146,15 @@ func TestMappingCheckErr(t *testing.T) {
 			wantCode:  3,
 		},
 		{
+			name: "型違いの Property 名に改行を含んでも 1 行",
+			props: []Property{
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "kindle-number", Name: "Kindle ID\n", Type: "number"},
+			},
+			wantError: `Notion で Property「Kindle ID\n」の型を number から rich_text に直してください`,
+			wantCode:  3,
+		},
+		{
 			name: "title と kindle_id の両方が不足",
 			props: []Property{
 				{ID: "memo-id", Name: "Memo", Type: "number"},
