@@ -178,7 +178,7 @@ func TestInitInteractive(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 		}
-		wantStderr := "Notion token: Notion Database URL or ID: title\n" +
+		wantStderr := setupGuide() + "Notion token: Notion Database URL or ID: title\n" +
 			"  1) Name\nnumber [1]: kindle_id\n" +
 			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\nnumber [3]: author\n" +
 			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [2]: asin\n" +
@@ -262,6 +262,33 @@ func TestInitInteractive(t *testing.T) {
 		}
 	})
 
+	t.Run("案内は問いより前に出る", func(t *testing.T) {
+		tests := []struct {
+			name, input, token string
+			args               []string
+		}{
+			{"token を入力する経路", initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n", "", []string{"init"}},
+			{"token を環境変数から取る経路", initDatabaseRawID + "\n\n\n\n\n\n", initTokenValue, []string{"init"}},
+			{"--database-id を指定する経路", initTokenValue + "\n\n\n\n\n\n", "", []string{"init", "--database-id", initDatabaseRawID}},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, _, code, _, stderr := runInitTest(t, tt.args, tt.input, tt.token, initRoutes(initDataSourceResponse("ds-1", true, false)))
+				if code != 0 {
+					t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
+				}
+				if ok := strings.HasPrefix(stderr, setupGuide()); !ok {
+					t.Errorf("strings.HasPrefix(stderr, setupGuide()) = %v, want %v (stderr = %q)", ok, true, stderr)
+				}
+				guide := strings.Index(stderr, setupGuide())
+				url := strings.Index(stderr, "Notion Database URL or ID")
+				if before := guide >= 0 && guide < url; url >= 0 && !before {
+					t.Errorf("guide index %d < URL prompt index %d = %v, want %v", guide, url, before, true)
+				}
+			})
+		}
+	})
+
 	t.Run("0 で既定の author を解除し、ASIN に Memo を選ぶ", func(t *testing.T) {
 		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n0\n4\n\n"
 		p, _, code, stdout, stderr := runInitTest(t, []string{"init"}, input, "", initRoutes(initDataSourceResponse("ds-1", true, false)))
@@ -291,7 +318,7 @@ func TestInitInteractive(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 		}
-		wantStderr := "Notion token: Notion Database URL or ID: " +
+		wantStderr := setupGuide() + "Notion token: Notion Database URL or ID: " +
 			"not mapping property \"Author\" to author: type is number, want rich_text\n" +
 			"not mapping property \"ASIN\" to asin: type is select, want rich_text\n" +
 			"not mapping property \"Last Annotated At\" to last_annotated_at: type is rich_text, want date\n" +
@@ -658,8 +685,8 @@ func TestInitErrors(t *testing.T) {
 		tests := []struct {
 			name, input, want string
 		}{
-			{"空 token", "\n", "Notion token: configuration / confirmation required: notion token must not be empty\n"},
-			{"不正な database", initTokenValue + "\nnot-a-database\n", "Notion token: Notion Database URL or ID: configuration / confirmation required: no Notion database ID found: enter a 32-character hex ID, a UUID, or a Notion database URL\n"},
+			{"空 token", "\n", setupGuide() + "Notion token: configuration / confirmation required: notion token must not be empty\n"},
+			{"不正な database", initTokenValue + "\nnot-a-database\n", setupGuide() + "Notion token: Notion Database URL or ID: configuration / confirmation required: no Notion database ID found: enter a 32-character hex ID, a UUID, or a Notion database URL\n"},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -698,7 +725,7 @@ func TestInitErrors(t *testing.T) {
 				args:       []string{"init"},
 				input:      initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n",
 				dataSource: missing,
-				want:       "Notion token: Notion Database URL or ID: configuration / confirmation required: missing property for kindle_id: need a property of type rich_text\n",
+				want:       setupGuide() + "Notion token: Notion Database URL or ID: configuration / confirmation required: missing property for kindle_id: need a property of type rich_text\n",
 			},
 			{
 				name:       "不足 --yes",
@@ -712,7 +739,7 @@ func TestInitErrors(t *testing.T) {
 				args:       []string{"init"},
 				input:      initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n",
 				dataSource: mismatched,
-				want:       "Notion token: Notion Database URL or ID: configuration / confirmation required: property \"Kindle ID\" for kindle_id has type number, want rich_text\n",
+				want:       setupGuide() + "Notion token: Notion Database URL or ID: configuration / confirmation required: property \"Kindle ID\" for kindle_id has type number, want rich_text\n",
 			},
 			{
 				name:       "型違い --yes",
@@ -787,7 +814,7 @@ func TestInitErrors(t *testing.T) {
 			"/v1/databases/" + initDatabaseID: initDatabaseResponse(),
 		}
 		p, stub, code, _, stderr := runInitTest(t, []string{"init", "--database-id", initDatabaseRawID}, "", initTokenValue, responses)
-		want := "configuration / confirmation required: database has no data source\n"
+		want := setupGuide() + "configuration / confirmation required: database has no data source\n"
 		if code != 3 || stderr != want {
 			t.Errorf("code = %d, stderr = %q, want %q", code, stderr, want)
 		}
