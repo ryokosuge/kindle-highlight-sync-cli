@@ -25,12 +25,12 @@ func TestPrintSetupGuide(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if !strings.Contains(got, tt.want) {
-				t.Errorf("printSetupGuide() = %q, want it to contain %q", got, tt.want)
+			if ok := strings.Contains(got, tt.want); !ok {
+				t.Errorf("strings.Contains(printSetupGuide(), %q) = %v, want %v (guide = %q)", tt.want, ok, true, got)
 			}
 		})
 	}
-	if !strings.HasSuffix(got, "\n\n") {
-		t.Errorf("printSetupGuide() = %q, want suffix blank line", got)
+	if ok := strings.HasSuffix(got, "\n\n"); !ok {
+		t.Errorf("strings.HasSuffix(printSetupGuide(), %q) = %v, want %v (guide = %q)", "\n\n", ok, true, got)
 	}
 }

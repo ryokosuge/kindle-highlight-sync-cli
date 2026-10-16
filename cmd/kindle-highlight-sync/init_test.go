@@ -277,12 +277,13 @@ func TestInitInteractive(t *testing.T) {
 				if code != 0 {
 					t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 				}
-				if !strings.HasPrefix(stderr, setupGuide()) {
-					t.Errorf("stderr = %q, want prefix guide", stderr)
+				if ok := strings.HasPrefix(stderr, setupGuide()); !ok {
+					t.Errorf("strings.HasPrefix(stderr, setupGuide()) = %v, want %v (stderr = %q)", ok, true, stderr)
 				}
 				guide := strings.Index(stderr, setupGuide())
-				if i := strings.Index(stderr, "Notion Database URL or ID"); i >= 0 && guide > i {
-					t.Errorf("guide index = %d, want before URL prompt index %d", guide, i)
+				url := strings.Index(stderr, "Notion Database URL or ID")
+				if before := guide >= 0 && guide < url; url >= 0 && !before {
+					t.Errorf("guide index %d < URL prompt index %d = %v, want %v", guide, url, before, true)
 				}
 			})
 		}
