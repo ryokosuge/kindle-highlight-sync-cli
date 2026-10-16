@@ -121,11 +121,45 @@ func TestMappingCheckErr(t *testing.T) {
 		wantCode  int
 	}{
 		{
-			name: "不足と型違い",
+			name: "title 不足と kindle_id の型違いが同時",
 			props: []Property{
 				{ID: "kindle-number", Name: "Kindle ID", Type: "number"},
 			},
-			wantError: `missing property for title: need a property of type title; property "Kindle ID" for kindle_id has type number, want rich_text`,
+			wantError: "Notion で型 title の Property を足してください（名前は問いません）; Notion で Property「Kindle ID」の型を number から rich_text に直してください",
+			wantCode:  3,
+		},
+		{
+			name: "kindle_id 不足",
+			props: []Property{
+				{ID: "title-id", Name: "Name", Type: "title"},
+			},
+			wantError: "Notion で Property「Kindle ID」を型 rich_text で足してください",
+			wantCode:  3,
+		},
+		{
+			name: "kindle_id の候補が number",
+			props: []Property{
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "kindle-number", Name: "Kindle ID", Type: "number"},
+			},
+			wantError: "Notion で Property「Kindle ID」の型を number から rich_text に直してください",
+			wantCode:  3,
+		},
+		{
+			name: "型違いの Property 名に改行を含んでも 1 行",
+			props: []Property{
+				{ID: "title-id", Name: "Name", Type: "title"},
+				{ID: "kindle-number", Name: "Kindle ID\n", Type: "number"},
+			},
+			wantError: `Notion で Property「Kindle ID\n」の型を number から rich_text に直してください`,
+			wantCode:  3,
+		},
+		{
+			name: "title と kindle_id の両方が不足",
+			props: []Property{
+				{ID: "memo-id", Name: "Memo", Type: "number"},
+			},
+			wantError: "Notion で型 title の Property を足してください（名前は問いません）; Notion で Property「Kindle ID」を型 rich_text で足してください",
 			wantCode:  3,
 		},
 		{
