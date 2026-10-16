@@ -171,6 +171,26 @@ func wantInitSummary(path string) string {
 		"title: Name\nkindle_id: Kindle ID\nauthor: Author\nasin: ASIN\nlast_annotated_at: Last Annotated At\n"
 }
 
+func TestInitFieldPrompt(t *testing.T) {
+	input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
+	_, _, code, _, stderr := runInitTest(t, []string{"init"}, input, "", initRoutes(initDataSourceResponse("ds-1", true, false)))
+	if code != 0 {
+		t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
+	}
+	for _, field := range notion.Fields() {
+		t.Run(string(field)+"の問いに用途と型が含まれる", func(t *testing.T) {
+			for _, want := range []string{string(field), field.Purpose(), field.Type()} {
+				if want == "" || !strings.Contains(stderr, want) {
+					t.Errorf("stderr contains %q = %v, want %v", want, false, true)
+				}
+			}
+			if prompt := fieldPrompt(field); !strings.Contains(stderr, prompt+"\n") {
+				t.Errorf("stderr contains %q = %v, want %v", prompt, false, true)
+			}
+		})
+	}
+}
+
 func TestInitInteractive(t *testing.T) {
 	t.Run("token と既定の対応を保存する", func(t *testing.T) {
 		input := initTokenValue + "\n" + initDatabaseRawID + "\n\n\n\n\n\n"
@@ -178,11 +198,11 @@ func TestInitInteractive(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 		}
-		wantStderr := setupGuide() + "Notion token: Notion Database URL or ID: title\n" +
-			"  1) Name\nnumber [1]: kindle_id\n" +
-			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\nnumber [3]: author\n" +
-			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [2]: asin\n" +
-			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [1]: last_annotated_at\n" +
+		wantStderr := setupGuide() + "Notion token: Notion Database URL or ID: " + fieldPrompt(notion.FieldTitle) + "\n" +
+			"  1) Name\nnumber [1]: " + fieldPrompt(notion.FieldKindleID) + "\n" +
+			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\nnumber [3]: " + fieldPrompt(notion.FieldAuthor) + "\n" +
+			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [2]: " + fieldPrompt(notion.FieldASIN) + "\n" +
+			"  1) ASIN\n  2) Author\n  3) Kindle ID\n  4) Memo\n  0) do not map\nnumber [1]: " + fieldPrompt(notion.FieldLastAnnotatedAt) + "\n" +
 			"  1) Last Annotated At\n  0) do not map\nnumber [1]: "
 		if stderr != wantStderr {
 			t.Errorf("stderr = %q, want %q", stderr, wantStderr)
@@ -322,10 +342,10 @@ func TestInitInteractive(t *testing.T) {
 			"not mapping property \"Author\" to author: type is number, want rich_text\n" +
 			"not mapping property \"ASIN\" to asin: type is select, want rich_text\n" +
 			"not mapping property \"Last Annotated At\" to last_annotated_at: type is rich_text, want date\n" +
-			"title\n  1) Name\nnumber [1]: kindle_id\n" +
-			"  1) Kindle ID\n  2) Last Annotated At\nnumber [1]: author\n" +
-			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: asin\n" +
-			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: last_annotated_at\n" +
+			fieldPrompt(notion.FieldTitle) + "\n  1) Name\nnumber [1]: " + fieldPrompt(notion.FieldKindleID) + "\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\nnumber [1]: " + fieldPrompt(notion.FieldAuthor) + "\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: " + fieldPrompt(notion.FieldASIN) + "\n" +
+			"  1) Kindle ID\n  2) Last Annotated At\n  0) do not map\nnumber [0]: " + fieldPrompt(notion.FieldLastAnnotatedAt) + "\n" +
 			"  0) do not map\nnumber [0]: "
 		if stderr != wantStderr {
 			t.Errorf("stderr = %q, want %q", stderr, wantStderr)
