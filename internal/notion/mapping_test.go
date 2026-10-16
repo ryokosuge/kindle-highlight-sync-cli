@@ -53,23 +53,23 @@ func TestFieldAccessors(t *testing.T) {
 		purpose     string
 	}{
 		{
-			name: "title", field: FieldTitle, typ: "title", defaultName: "",
+			name: "タイトル", field: FieldTitle, typ: "title", defaultName: "",
 			purpose: "Book のタイトル",
 		},
 		{
-			name: "kindle_id", field: FieldKindleID, typ: "rich_text", defaultName: "Kindle ID",
+			name: "Kindle ID", field: FieldKindleID, typ: "rich_text", defaultName: "Kindle ID",
 			purpose: "Book ID（ASIN、取れなければ b1- で始まる代替値）。同期先のページを見分けるのに使う",
 		},
 		{
-			name: "author", field: FieldAuthor, typ: "rich_text", defaultName: "Author",
+			name: "著者", field: FieldAuthor, typ: "rich_text", defaultName: "Author",
 			purpose: "Book の著者",
 		},
 		{
-			name: "asin", field: FieldASIN, typ: "rich_text", defaultName: "ASIN",
+			name: "ASIN", field: FieldASIN, typ: "rich_text", defaultName: "ASIN",
 			purpose: "Book の ASIN",
 		},
 		{
-			name: "last_annotated_at", field: FieldLastAnnotatedAt, typ: "date", defaultName: "Last Annotated At",
+			name: "最終注釈日時", field: FieldLastAnnotatedAt, typ: "date", defaultName: "Last Annotated At",
 			purpose: "Kindle Notebook で最後に Highlight や Note を付けた日時",
 		},
 	}
