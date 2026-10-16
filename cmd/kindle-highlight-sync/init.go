@@ -64,6 +64,7 @@ func runInit(cmd *cobra.Command, a *app, databaseID string, force, yes bool) err
 	var p *prompter
 	if !yes {
 		p = newInitPrompter(cmd)
+		printSetupGuide(p.out)
 	}
 	token, saveToken, err := initToken(p, yes)
 	if err != nil {
