@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -177,18 +178,39 @@ func TestInitFieldPrompt(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(init) code = %d, stderr = %q", code, stderr)
 	}
-	for _, field := range notion.Fields() {
-		t.Run(string(field)+"の問いに用途と型が含まれる", func(t *testing.T) {
-			for _, want := range []string{string(field), field.Purpose(), field.Type()} {
-				if want == "" || !strings.Contains(stderr, want) {
-					t.Errorf("stderr contains %q = %v, want %v", want, false, true)
-				}
+	tests := []struct {
+		name    string
+		key     string
+		purpose string
+		typ     string
+	}{
+		{"title の問いに用途と title 型が含まれる", "title", "Book のタイトル", "title"},
+		{"kindle_id の問いに用途と rich_text 型が含まれる", "kindle_id", "同期先のページを見分けるのに使う", "rich_text"},
+		{"author の問いに用途と rich_text 型が含まれる", "author", "Book の著者", "rich_text"},
+		{"asin の問いに用途と rich_text 型が含まれる", "asin", "Book の ASIN", "rich_text"},
+		{"last_annotated_at の問いに用途と date 型が含まれる", "last_annotated_at", "最後に Highlight や Note を付けた日時", "date"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			question := questionLine(t, stderr, tt.key)
+			if got := strings.Contains(question, tt.purpose); !got {
+				t.Errorf("question %q contains %q = %v, want %v", question, tt.purpose, got, true)
 			}
-			if prompt := fieldPrompt(field); !strings.Contains(stderr, prompt+"\n") {
-				t.Errorf("stderr contains %q = %v, want %v", prompt, false, true)
+			if got := strings.Contains(question, "型: "+tt.typ+"）"); !got {
+				t.Errorf("question %q contains type %q = %v, want %v", question, tt.typ, got, true)
 			}
 		})
 	}
+}
+
+// questionLine は stderr から key の対応付けの問い 1 行を返す。問いは直前の入力待ちの行の末尾に続く。
+func questionLine(t *testing.T, stderr, key string) string {
+	t.Helper()
+	m := regexp.MustCompile(`(?:ID|\]): (` + regexp.QuoteMeta(key) + `: [^\n]*)`).FindStringSubmatch(stderr)
+	if m == nil {
+		t.Fatalf("question for %q in stderr = %q, want a line", key, stderr)
+	}
+	return m[1]
 }
 
 func TestInitInteractive(t *testing.T) {
