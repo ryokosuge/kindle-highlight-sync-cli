@@ -51,19 +51,32 @@ func readmeTable(t *testing.T) map[int]string {
 
 func TestReadmeExitCodeTable(t *testing.T) {
 	table := readmeTable(t)
-	kinds := []Kind{General, AmazonAuth, ConfigRequired, Notion, Browser, LocalState, SourceFormat, PartialFailure, AlreadyRunning}
-	for _, kind := range kinds {
-		t.Run(kind.String(), func(t *testing.T) {
-			got, ok := table[int(kind)]
+	tests := []struct {
+		name string
+		kind Kind
+	}{
+		{name: "一般", kind: General},
+		{name: "Amazon認証", kind: AmazonAuth},
+		{name: "設定", kind: ConfigRequired},
+		{name: "Notion", kind: Notion},
+		{name: "ブラウザー", kind: Browser},
+		{name: "ローカル状態", kind: LocalState},
+		{name: "ソース形式", kind: SourceFormat},
+		{name: "一部失敗", kind: PartialFailure},
+		{name: "実行中", kind: AlreadyRunning},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := table[int(tt.kind)]
 			if !ok {
-				t.Fatalf("README の %q の表に値 %d の行が無い", readmeSection, int(kind))
+				t.Fatalf("README の %q の表に値 %d の行が無い", readmeSection, int(tt.kind))
 			}
-			if got != kind.String() {
-				t.Errorf("README の値 %d の名前 = %q, want %q", int(kind), got, kind.String())
+			if got != tt.kind.String() {
+				t.Errorf("README の値 %d の名前 = %q, want %q", int(tt.kind), got, tt.kind.String())
 			}
 		})
 	}
-	if len(table) != len(kinds) {
-		t.Errorf("README の表の行数 = %v, want %v（1〜9 以外の行がある）: %v", len(table), len(kinds), table)
+	if len(table) != len(tests) {
+		t.Errorf("README の表の行数 = %v, want %v（1〜9 以外の行がある）: %v", len(table), len(tests), table)
 	}
 }
