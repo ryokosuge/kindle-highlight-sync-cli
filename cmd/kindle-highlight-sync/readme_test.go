@@ -104,10 +104,10 @@ func TestReadmeMatchesCLI(t *testing.T) {
 		}
 		gotSub, gotFlag := undefinedInReadme(string(b), subcommands, flags)
 		if len(gotSub) > 0 {
-			t.Errorf("%s の未定義のサブコマンド = %v, want none（定義: sync / login / init。README か CLI を直す）", readmePath, gotSub)
+			t.Errorf("%s の未定義のサブコマンド = %v, want []", readmePath, gotSub)
 		}
 		if len(gotFlag) > 0 {
-			t.Errorf("%s の未定義のフラグ = %v, want none（root とサブコマンドの Flags に定義があるか確認する）", readmePath, gotFlag)
+			t.Errorf("%s の未定義のフラグ = %v, want []", readmePath, gotFlag)
 		}
 	})
 }
