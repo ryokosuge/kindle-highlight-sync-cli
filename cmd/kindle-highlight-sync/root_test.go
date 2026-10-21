@@ -81,6 +81,42 @@ func TestRootCmd(t *testing.T) {
 	}
 }
 
+func TestRootCmdVersion(t *testing.T) {
+	tests := []struct {
+		name    string
+		newRoot func() *cobra.Command
+		want    string
+	}{
+		{
+			name:    "版 v1.2.3 を与えると v1.2.3 が出る",
+			newRoot: func() *cobra.Command { return newRootCmdWith(&app{}, "v1.2.3") },
+			want:    "kindle-highlight-sync version v1.2.3\n",
+		},
+		{
+			name:    "版を与えない root command では dev が出る",
+			newRoot: newRootCmd,
+			want:    "kindle-highlight-sync version dev\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := setupXDG(t, "")
+			var out, errOut bytes.Buffer
+			if code := execute(tt.newRoot(), []string{"--version"}, &out, &errOut); code != 0 {
+				t.Fatalf("exit code = %v, want 0 (stderr: %q)", code, errOut.String())
+			}
+			if out.String() != tt.want {
+				t.Errorf("stdout = %q, want %q", out.String(), tt.want)
+			}
+			for _, path := range []string{p.DataDir, p.ConfigFile, p.StateFile()} {
+				if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+					t.Errorf("Stat(%q) error = %v, want not exist (--version must not create files)", path, err)
+				}
+			}
+		})
+	}
+}
+
 func TestRootCmdPreflight(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -111,7 +147,7 @@ func TestRootCmdPreflight(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			p := setupXDG(t, tt.configTOML)
 			a := &app{}
-			root := newRootCmdWith(a)
+			root := newRootCmdWith(a, "dev")
 			var got app
 			root.AddCommand(&cobra.Command{
 				Use: "probe",

@@ -11,6 +11,9 @@ import (
 	"github.com/ryokosuge/kindle-highlight-sync-cli/internal/redact"
 )
 
+// version は Release の build が `-X main.version=<tag>` で上書きする。与えなければ dev。
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
