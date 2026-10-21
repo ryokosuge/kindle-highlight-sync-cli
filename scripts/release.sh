@@ -8,13 +8,16 @@ version="${1:?usage: scripts/release.sh <version>}"
 dist="${DIST_DIR:-dist}"
 rm -rf "$dist" && mkdir -p "$dist"
 
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
+
 for arch in arm64 amd64; do
-  work="$(mktemp -d)"
+  work="$tmp/$arch"
+  mkdir -p "$work"
   CGO_ENABLED=0 GOOS=darwin GOARCH="$arch" go build -trimpath \
     -ldflags "-s -w -X main.version=${version}" \
     -o "$work/kindle-highlight-sync" ./cmd/kindle-highlight-sync
   COPYFILE_DISABLE=1 tar -C "$work" -czf "$dist/kindle-highlight-sync_${version}_darwin_${arch}.tar.gz" kindle-highlight-sync
-  rm -rf "$work"
 done
 
 cd "$dist"
