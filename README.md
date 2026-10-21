@@ -99,7 +99,11 @@ exit code ごとの原因と次の手。値と名前の一覧は「exit code」�
 
 stderr の文言で原因を見分ける。
 
-- `config.toml` が無い、または Notion token が見つからない。stderr に `init` を案内する文言が出る。`./kindle-highlight-sync init` を実行する。token は環境変数 `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` か Keychain から読むので、「Notion の準備」の渡し方のどちらかを済ませる。`config.toml` が既にあるのに壊れているときも exit 3 になる。`./kindle-highlight-sync init --force` で作り直す。
+- `config.toml` が無い。stderr に `init` を案内する文言が出る。`./kindle-highlight-sync init` を実行する。
+- `config.toml` はあるが Notion token が見つからない。stderr には同じく `init` を案内する文言が出るが、`config.toml` が既にあると `init` は `init --force` を案内して止まる。次のどちらかで token を渡す。
+  - Keychain に保存する。`./kindle-highlight-sync init --force` を実行して token を入力する。`config.toml` だけを作り直し、`browser-profile` と `state.db` は保持する。
+  - 環境変数 `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` に token を設定して `sync` を実行する。
+- `config.toml` が壊れている。`./kindle-highlight-sync init --force` で作り直す。
 - `init` 時に integration が Books Database に接続されていない。stderr に日本語の接続手順が出る。「Notion の準備」の手順 3 のとおり接続してから、もう一度 `init` を実行する。
 - Initial Sync の確認が通っていない。端末でない入力（cron や launchd など）で動かしたときは stderr に `--yes` の案内が出る。端末で `y` 以外を答えたときも同じ exit 3 になる。内容を確かめて進めるなら、`./kindle-highlight-sync sync` を端末で動かして `y` を答えるか、`./kindle-highlight-sync sync --yes` を実行する。
 
