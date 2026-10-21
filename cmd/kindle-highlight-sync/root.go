@@ -30,15 +30,16 @@ type app struct {
 }
 
 func newRootCmd() *cobra.Command {
-	return newRootCmdWith(&app{})
+	return newRootCmdWith(&app{}, version)
 }
 
-func newRootCmdWith(a *app) *cobra.Command {
+func newRootCmdWith(a *app, version string) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "kindle-highlight-sync",
 		Short:         "Kindle の Highlight と Note を Notion Books Database に同期する",
 		SilenceUsage:  true,
 		SilenceErrors: true,
+		Version:       version,
 	}
 	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if isCobraDefaultCmd(cmd) {
