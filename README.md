@@ -12,18 +12,48 @@ Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取
 
 ライセンスは MIT。詳細は [LICENSE](LICENSE) を参照する。
 
-## macOS での build と起動
+## インストール
 
 1. Go 1.27 以上を用意する。https://go.dev/dl/ の macOS 向けインストーラ、または `brew install go` でインストールできる。`go version` で確認する。
 2. `git clone https://github.com/ryokosuge/kindle-highlight-sync-cli.git` を実行し、`cd kindle-highlight-sync-cli` でディレクトリに移動する。
 3. `go build ./cmd/kindle-highlight-sync` でバイナリを build する。
 4. `./kindle-highlight-sync --help` を実行する。説明 1 行が表示される。`echo $?` で `0` を確認する。
 
+以降の手順は、build したカレントディレクトリのバイナリを `./kindle-highlight-sync` として呼ぶ。
+
+## Notion の準備
+
+`init` の前に、Notion 側で次の 3 つを用意する。`init` も最初の問いの前に同じ内容を案内する。
+
+1. integration を作って token を取る。workspace の owner が integration を作り、token を取得する。作り方は公式の https://developers.notion.com/docs/authorization を参照する。
+2. Books Database に次の Property を用意する（Notion の型名はそのまま書く）。
+
+   | Property | 型 | 必須 | 内容 |
+   |---|---|---|---|
+   | （名前は任意） | title | 必須 | Book のタイトル |
+   | Kindle ID | rich_text | 必須 | Book ID（ASIN、取れなければ `b1-` で始まる代替値）。同期先のページを見分けるのに使う |
+   | Author | rich_text | 任意 | Book の著者 |
+   | ASIN | rich_text | 任意 | Book の ASIN |
+   | Last Annotated At | date | 任意 | Kindle Notebook で最後に Highlight や Note を付けた日時 |
+
+3. 作った integration を Books Database に接続する。Notion で Books Database のページを開き、右上の「…」メニューから「接続」（英語表示では Connections / Add connections）で integration を追加する。接続していないと Database を読めない。
+
+token の渡し方は 2 通りで、`config.toml` には token を書かない。
+
+- 環境変数 `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` に token を設定する。設定されていればその実行だけで使う。
+- 環境変数を設定しない場合は、`init` が入力を求め、入力した token を macOS Keychain の service `kindle-highlight-sync`、account `notion-token` に保存する。
+
+## login
+
+`./kindle-highlight-sync login` は、画面付きの Chrome を開く。「ブラウザで Amazon にログインしてください」と 1 行出るので、開いた Chrome で Amazon にログインする（MFA の入力も同じ画面で行う）。Kindle Notebook まで進むとコマンドは exit 0 で終わる。終了時に成功の文言は出ない。10 分以内に Kindle Notebook に届かないときは exit 2 になる。
+
+ログインの状態は `browser-profile`（`$XDG_DATA_HOME/kindle-highlight-sync/browser-profile`、未設定時は `~/.local/share/kindle-highlight-sync/browser-profile`）に保存され、`sync` がそのまま使う。
+
 ## init
 
-`./kindle-highlight-sync init` は、Notion token、Books Database、Data Source、Property の対応を順に確認し、`$XDG_CONFIG_HOME/kindle-highlight-sync/config.toml`（未設定時は `~/.config/kindle-highlight-sync/config.toml`）を作成する。
+`./kindle-highlight-sync init` は、Notion token、Books Database、Data Source、Property の対応を順に確認し、`$XDG_CONFIG_HOME/kindle-highlight-sync/config.toml`（未設定時は `~/.config/kindle-highlight-sync/config.toml`）を作成する。token の用意は「Notion の準備」を参照する。うまくいくと `saved <config.toml のパス>` と `database_id:` などの設定内容が表示される。
 
-token は `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` が設定されていればその実行だけで使い、`config.toml` には保存しない。未設定なら入力を求め、macOS Keychain の service `kindle-highlight-sync`、account `notion-token` に保存する。`--database-id` で Database ID を指定できる。`--yes` は対話せず既定値だけで進めるため、token が見つからない場合、Data Source が複数ある場合、title または kindle_id の既定 Property がない場合は exit 3 になる。
+`--database-id` で Database ID を指定できる。`--yes` は対話せず既定値だけで進めるため、token が見つからない場合、Data Source が複数ある場合、title または kindle_id の既定 Property がない場合は exit 3 になる。
 
 `--force` は `config.toml` だけを作り直し、`browser-profile` と `state.db` は保持する。exit 3 は設定または確認が必要な場合、exit 4 は Notion API のエラーを表す。
 
