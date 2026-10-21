@@ -13,7 +13,7 @@ archives=(
 )
 (cd "$dist" && rm -f checksums.txt "${archives[@]}")
 
-tmp="$(mktemp -d)"
+tmp="$(cd "$(mktemp -d)" && pwd -P)"
 trap 'rm -rf "$tmp"' EXIT
 
 for arch in arm64 amd64; do
