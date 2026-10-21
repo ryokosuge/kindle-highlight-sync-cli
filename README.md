@@ -2,6 +2,16 @@
 
 Kindle の Highlight と Note を Notion Books Database に同期する CLI。
 
+Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取り出し、Notion の Books Database に同期する。
+
+動く環境:
+
+- macOS（対象は macOS だけで、Linux / Windows は対象外。動作確認と配布をしない）
+- Google Chrome（`login` と `sync` の実行時に使う）
+- Notion integration（その token が要る）
+
+ライセンスは MIT。詳細は [LICENSE](LICENSE) を参照する。
+
 ## macOS での build と起動
 
 1. Go 1.27 以上を用意する。https://go.dev/dl/ の macOS 向けインストーラ、または `brew install go` でインストールできる。`go version` で確認する。
