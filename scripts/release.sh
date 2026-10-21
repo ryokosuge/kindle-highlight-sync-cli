@@ -6,7 +6,12 @@ set -euo pipefail
 
 version="${1:?usage: scripts/release.sh <version>}"
 dist="${DIST_DIR:-dist}"
-rm -rf "$dist" && mkdir -p "$dist"
+mkdir -p "$dist"
+archives=(
+  "kindle-highlight-sync_${version}_darwin_amd64.tar.gz"
+  "kindle-highlight-sync_${version}_darwin_arm64.tar.gz"
+)
+(cd "$dist" && rm -f checksums.txt "${archives[@]}")
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -21,5 +26,5 @@ for arch in arm64 amd64; do
 done
 
 cd "$dist"
-if command -v sha256sum >/dev/null; then sha256sum ./*.tar.gz; else shasum -a 256 ./*.tar.gz; fi \
-  | sed 's# \./# #' > checksums.txt
+if command -v sha256sum >/dev/null; then sha256sum "${archives[@]}"; else shasum -a 256 "${archives[@]}"; fi \
+  > checksums.txt
