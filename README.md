@@ -68,3 +68,19 @@ token の渡し方は 2 通りで、`config.toml` には token を書かない�
 通常の `sync` が対象にするのは、`state.db` の `books` に記録が無い Book、Kindle の Last Annotated Date が無い Book、および Last Annotated Date が記録済みの `last_synced_at` の UTC の暦日の前日以降にある Book だけで、`last_synced_at` が Last Annotated Date より 2 日以上後の Book は Highlight の取得も Notion への要求も行わない。ASIN の無い Book は同期を終えられず記録が付かないので、常に対象に残る。`--full` を付けると `state.db` の記録に関わらず全 Book を対象にする。標準出力の末尾に `Target books  <対象の数> of <全 Book の数>` の行が出る。
 
 `--dry-run` は Notion と State を変えずに Book の照合の結果と追記する Highlight の数だけを出す。確認も記録もせず、`state.db` も作らない（対象の選択のために `state.db` の `books` は読むが、無ければ作らず、あっても内容を変えない）。`--full` と併用すると全 Book の予定を出す。
+
+## exit code
+
+0 は成功。失敗したときは stderr の先頭に次の表の名前が出て、対応する値で終了する。
+
+| 値 | 名前 | 意味 |
+|---|---|---|
+| 1 | general error | 上のどれにも当たらない失敗。`sync` が Notebook に届かず、認証切れとも判定されないときも含む |
+| 2 | Amazon authentication required | Amazon の認証が切れている。`login` が 10 分以内に Notebook に届かないときも含む |
+| 3 | configuration / confirmation required | 設定または確認が必要。Notion token が見つからない、`init` 時に integration が Books Database に接続されていない、Initial Sync の確認に `y` 以外を答えた（または端末でない）ときなど |
+| 4 | Notion error | `sync` 中の Notion API の失敗（401 / 403 / 404 を含む） |
+| 5 | browser error | Chrome の起動または終了の失敗 |
+| 6 | local state / ID scheme error | `state.db` の読み書きの失敗、または ID の方式が合わない |
+| 7 | source format error | Kindle Notebook 画面全体の構造が想定と違う |
+| 8 | partial failure | Book 単位の失敗（ASIN の無い Book、Highlight の取得や書き込みの失敗など）。失敗した Book 以外は同期する |
+| 9 | already running | 別の `kindle-highlight-sync` が実行中 |
