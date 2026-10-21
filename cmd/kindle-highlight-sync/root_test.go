@@ -81,38 +81,68 @@ func TestRootCmd(t *testing.T) {
 	}
 }
 
-func TestRootCmdVersion(t *testing.T) {
+// assertNoFilesCreated は --version がデータディレクトリ・config.toml・state.db のどれも作らないことを確かめる。
+func assertNoFilesCreated(t *testing.T, p config.Paths) {
+	t.Helper()
+	for _, path := range []string{p.DataDir, p.ConfigFile, p.StateFile()} {
+		if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
+			t.Errorf("Stat(%q) error = %v, want not exist (--version must not create files)", path, err)
+		}
+	}
+}
+
+func TestRunVersion(t *testing.T) {
 	tests := []struct {
-		name    string
-		newRoot func() *cobra.Command
-		want    string
+		name       string
+		args       []string
+		wantStdout string
 	}{
-		{
-			name:    "版 v1.2.3 を与えると v1.2.3 が出る",
-			newRoot: func() *cobra.Command { return newRootCmdWith(&app{}, "v1.2.3") },
-			want:    "kindle-highlight-sync version v1.2.3\n",
-		},
-		{
-			name:    "版を与えない root command では dev が出る",
-			newRoot: newRootCmd,
-			want:    "kindle-highlight-sync version dev\n",
-		},
+		{name: "版を与えない root command では dev が出る", args: []string{"--version"}, wantStdout: "kindle-highlight-sync version dev\n"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			p := setupXDG(t, "")
-			var out, errOut bytes.Buffer
-			if code := execute(tt.newRoot(), []string{"--version"}, &out, &errOut); code != 0 {
-				t.Fatalf("exit code = %v, want 0 (stderr: %q)", code, errOut.String())
+			var stdout, stderr bytes.Buffer
+			if code := run(tt.args, &stdout, &stderr); code != 0 {
+				t.Errorf("run() code = %d, want 0", code)
 			}
-			if out.String() != tt.want {
-				t.Errorf("stdout = %q, want %q", out.String(), tt.want)
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Errorf("run() stdout = %q, want %q", got, tt.wantStdout)
 			}
-			for _, path := range []string{p.DataDir, p.ConfigFile, p.StateFile()} {
-				if _, err := os.Stat(path); !errors.Is(err, fs.ErrNotExist) {
-					t.Errorf("Stat(%q) error = %v, want not exist (--version must not create files)", path, err)
-				}
+			if got := stderr.String(); got != "" {
+				t.Errorf("run() stderr = %q, want empty", got)
 			}
+			assertNoFilesCreated(t, p)
+		})
+	}
+}
+
+func TestRootCmdWithVersion(t *testing.T) {
+	tests := []struct {
+		name       string
+		version    string
+		wantStdout string
+	}{
+		{name: "版 v1.2.3 を与えると v1.2.3 が出る", version: "v1.2.3", wantStdout: "kindle-highlight-sync version v1.2.3\n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := setupXDG(t, "")
+			cmd := newRootCmdWith(&app{}, tt.version)
+			var stdout, stderr bytes.Buffer
+			cmd.SetOut(&stdout)
+			cmd.SetErr(&stderr)
+			cmd.SetArgs([]string{"--version"})
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute() error = %v, want nil", err)
+			}
+			if got := stdout.String(); got != tt.wantStdout {
+				t.Errorf("stdout = %q, want %q", got, tt.wantStdout)
+			}
+			if got := stderr.String(); got != "" {
+				t.Errorf("stderr = %q, want empty", got)
+			}
+			assertNoFilesCreated(t, p)
 		})
 	}
 }
