@@ -14,8 +14,8 @@ import (
 const readmePath = "../../README.md"
 
 var (
-	readmeSubcommandRe = regexp.MustCompile("kindle-highlight-sync[ \t]+([a-z][a-z-]*)")
-	readmeFlagRe       = regexp.MustCompile(`--[a-z][a-z-]*`)
+	readmeSubcommandRe = regexp.MustCompile("kindle-highlight-sync[ \t]+([a-z][a-z0-9_-]*)")
+	readmeFlagRe       = regexp.MustCompile(`--[a-z][a-z0-9_-]*`)
 )
 
 // cobraAutoSubcommands は cobra が自動で足すコマンド。README に書いてよいが、root command の定義には含めない。
@@ -83,6 +83,8 @@ func TestReadmeMatchesCLI(t *testing.T) {
 		{name: "存在しないサブコマンド", readme: "```\nkindle-highlight-sync export\n```", wantSubcommand: []string{"export"}},
 		{name: "存在しないフラグ", readme: "`kindle-highlight-sync sync --verbose`", wantFlag: []string{"--verbose"}},
 		{name: "存在しないサブコマンドとフラグの両方", readme: "`kindle-highlight-sync push --remote`", wantSubcommand: []string{"push"}, wantFlag: []string{"--remote"}},
+		{name: "数字入りのサブコマンドとフラグ", readme: "`kindle-highlight-sync sync2 --dry-run2`", wantSubcommand: []string{"sync2"}, wantFlag: []string{"--dry-run2"}},
+		{name: "アンダースコア入りのサブコマンドとフラグ", readme: "`kindle-highlight-sync sync_all --dry_run`", wantSubcommand: []string{"sync_all"}, wantFlag: []string{"--dry_run"}},
 		{name: "見出しの直後の語はサブコマンドと見なさない", readme: "# kindle-highlight-sync\n\nintroduction"},
 	}
 	for _, tt := range tests {
