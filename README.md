@@ -25,7 +25,7 @@ Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取
 
 `init` の前に、Notion 側で次の 3 つを用意する。`init` も最初の問いの前に同じ内容を案内する。
 
-1. integration を作って token を取る。workspace の owner が integration を作り、token（Internal Integration Secret）を取得する。作り方は公式の https://developers.notion.com/docs/authorization を参照する。
+1. integration を作って token を取る。workspace の owner が integration を作り、token を取得する。作り方は公式の https://developers.notion.com/docs/authorization を参照する。
 2. Books Database に次の Property を用意する（Notion の型名はそのまま書く）。
 
    | Property | 型 | 必須 | 内容 |
