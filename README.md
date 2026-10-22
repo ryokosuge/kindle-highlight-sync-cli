@@ -17,7 +17,7 @@ Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取
 1. Go 1.27 以上を用意する。https://go.dev/dl/ の macOS 向けインストーラ、または `brew install go` でインストールできる。`go version` で確認する。
 2. `git clone https://github.com/ryokosuge/kindle-highlight-sync-cli.git` を実行し、`cd kindle-highlight-sync-cli` でディレクトリに移動する。
 3. `go build ./cmd/kindle-highlight-sync` でバイナリを build する。
-4. `./kindle-highlight-sync --help` を実行する。説明 1 行が表示される。`echo $?` で `0` を確認する。
+4. `./kindle-highlight-sync --help` を実行する。説明 1 行に続けて、Usage・Available Commands・Flags の help 全体が表示される。`echo $?` で `0` を確認する。
 
 以降の手順は、build したカレントディレクトリのバイナリを `./kindle-highlight-sync` として呼ぶ。
 
@@ -71,7 +71,7 @@ token の渡し方は 2 通りで、`config.toml` には token を書かない�
 
 ## exit code
 
-0 は成功。失敗したときは stderr の先頭に次の表の名前が出て、対応する値で終了する。対話式の `init` だけは、案内とプロンプトを先に stderr に出すため、名前はそれらの後に出る。
+0 は成功。失敗したときは stderr の先頭に次の表の名前が出て、対応する値で終了する。対話式の `init` と、Initial Sync の確認（件数と `Continue? [y/N]`）を stderr に出した `sync` は、案内やプロンプトを先に stderr に出すため、名前はそれらの後に出る（確認を拒否した exit 3 や、`y` と答えた後に失敗した場合も同じ）。入力が端末でない `sync` や `--yes` の実行は確認を出さないので、名前は先頭に出る。
 
 | 値 | 名前 | 意味 |
 |---|---|---|
