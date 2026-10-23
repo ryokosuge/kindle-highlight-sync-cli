@@ -14,12 +14,27 @@ Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取
 
 ## インストール
 
+前提:
+
+- macOS と Homebrew（https://brew.sh/）
+- Google Chrome は、この CLI の brew の定義では一緒に入らない。`login` と `sync` のために、利用者が別に入れる（公式サイトからでも、brew の cask の `google-chrome` でもよい）
+
+手順:
+
+1. `brew install ryokosuge/tap/kindle-highlight-sync` を実行する。tap の名前を含む完全修飾名で書く。
+2. `kindle-highlight-sync --help` を実行する。説明 1 行に続けて、Usage・Available Commands・Flags の help 全体が表示される。`echo $?` で `0` を確認する。
+3. 更新は `brew upgrade kindle-highlight-sync` で行う。
+
+以降の節の例は `./kindle-highlight-sync` と書いている。brew で入れた場合は `kindle-highlight-sync` と読み替える。
+
+### ソースから build する場合
+
 1. Go 1.27 以上を用意する。https://go.dev/dl/ の macOS 向けインストーラ、または `brew install go` でインストールできる。`go version` で確認する。
 2. `git clone https://github.com/ryokosuge/kindle-highlight-sync-cli.git` を実行し、`cd kindle-highlight-sync-cli` でディレクトリに移動する。
 3. `go build ./cmd/kindle-highlight-sync` でバイナリを build する。
 4. `./kindle-highlight-sync --help` を実行する。説明 1 行に続けて、Usage・Available Commands・Flags の help 全体が表示される。`echo $?` で `0` を確認する。
 
-以降の手順は、build したカレントディレクトリのバイナリを `./kindle-highlight-sync` として呼ぶ。
+build したカレントディレクトリのバイナリは `./kindle-highlight-sync` として呼ぶ。
 
 ## Notion の準備
 
