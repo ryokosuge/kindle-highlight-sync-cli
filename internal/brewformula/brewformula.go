@@ -79,7 +79,7 @@ func Render(tag string, checksums []byte) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if err := formulaTemplate.Execute(&buf, data); err != nil {
-		return nil, fmt.Errorf("Formula の本文を組み立てられない: %w", err)
+		return nil, fmt.Errorf("brew の定義の本文を組み立てられない: %w", err)
 	}
 	return buf.Bytes(), nil
 }
