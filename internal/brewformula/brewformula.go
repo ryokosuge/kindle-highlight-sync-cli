@@ -20,6 +20,9 @@ const (
 
 var sha256Pattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
+// tagPattern は Formula の文字列リテラルに入る tag を、引用符や制御文字を含み得ない SemVer の形に絞る。
+var tagPattern = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$`)
+
 var formulaTemplate = template.Must(template.New("formula").Parse(`class KindleHighlightSync < Formula
   desc "Sync Kindle highlights and notes to a Notion Books database"
   homepage "{{.Homepage}}"
@@ -62,8 +65,8 @@ type formulaData struct {
 // Render は tag（例: v1.2.3）と checksums.txt の本文から Formula の本文を返す。
 // 対象の asset は tag から組み立てた名前の完全一致で引く。
 func Render(tag string, checksums []byte) ([]byte, error) {
-	if !strings.HasPrefix(tag, tagPrefix) || len(tag) == len(tagPrefix) {
-		return nil, fmt.Errorf("tag %q は %q で始まる版（例: v1.2.3）でなければならない", tag, tagPrefix)
+	if !tagPattern.MatchString(tag) {
+		return nil, fmt.Errorf("tag %q は %q + 数字.数字.数字（任意で -pre-release）の形（例: v1.2.3, v1.2.3-rc.1）でなければならない", tag, tagPrefix)
 	}
 	arm64Name := assetName(tag, archARM64)
 	amd64Name := assetName(tag, archAMD64)

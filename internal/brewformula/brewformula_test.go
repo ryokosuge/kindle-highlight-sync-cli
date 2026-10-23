@@ -58,6 +58,11 @@ func TestRender異常系(t *testing.T) {
 		{"sha256 に大文字がある", "v1.2.3", sumLine(strings.ToUpper(shaARM64), nameARM) + sumLine(shaAMD64, nameAMD), nameARM},
 		{"同じ asset の行が 2 つある", "v1.2.3", sumLine(shaARM64, nameARM) + sumLine(shaARM64, nameARM) + sumLine(shaAMD64, nameAMD), nameARM},
 		{"tag が v で始まらない", "1.2.3", sumLine(shaARM64, nameARM) + sumLine(shaAMD64, nameAMD), "1.2.3"},
+		{"tag に引用符とセミコロンを含む", `v1.2.3";system("id");#`, "", "system"},
+		{"tag に空白を含む", "v1.2.3 x", "", "v1.2.3 x"},
+		{"tag に改行を含む", "v1.2.3\nend", "", "end"},
+		{"tag が数字.数字.数字の形でない", "v1.2", "", `"v1.2"`},
+		{"tag の接尾辞に使えない文字を含む", "v1.2.3-rc_1", "", "rc_1"},
 		{"tag が v だけ", "v", "", `"v"`},
 	}
 	for _, tt := range tests {
@@ -93,5 +98,18 @@ func TestRender同じ入力と行順の入れ替えで同じ本文(t *testing.T)
 	}
 	if !bytes.Equal(first, reordered) {
 		t.Errorf("行順を入れ替えた出力が違う:\n%s\n---\n%s", first, reordered)
+	}
+}
+
+func TestRenderpre_releaseのtagも通る(t *testing.T) {
+	tag := "v1.2.3-rc.1"
+	checksums := sumLine(shaARM64, strings.ReplaceAll(nameARM, "v1.2.3", tag)) +
+		sumLine(shaAMD64, strings.ReplaceAll(nameAMD, "v1.2.3", tag))
+	out, err := Render(tag, []byte(checksums))
+	if err != nil {
+		t.Fatalf("Render() error = %v, want nil", err)
+	}
+	if want := `version "1.2.3-rc.1"`; !strings.Contains(string(out), want) {
+		t.Errorf("Render() に %q が無い:\n%s", want, out)
 	}
 }
