@@ -24,3 +24,37 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/*.tar.gz dist/checksums.txt "${flags[@]}"
         env:
           GH_TOKEN: ${{ github.token }}
+
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    concurrency:
+      group: homebrew-tap
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/checkout@v7
+        with:
+          repository: ryokosuge/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+      - run: gh release download "$GITHUB_REF_NAME" -p checksums.txt -D "$RUNNER_TEMP/release"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: |
+          go run ./cmd/brew-formula -current tap/Formula/kindle-highlight-sync.rb \
+            "$GITHUB_REF_NAME" "$RUNNER_TEMP/release/checksums.txt" > "$RUNNER_TEMP/kindle-highlight-sync.rb"
+          mv "$RUNNER_TEMP/kindle-highlight-sync.rb" tap/Formula/kindle-highlight-sync.rb
+      - working-directory: tap
+        run: |
+          if git diff --quiet; then echo "tap の定義に変更なし"; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "kindle-highlight-sync ${GITHUB_REF_NAME#v}"
+          git push origin HEAD:main
