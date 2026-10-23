@@ -33,6 +33,7 @@ jobs:
     concurrency:
       group: homebrew-tap
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
