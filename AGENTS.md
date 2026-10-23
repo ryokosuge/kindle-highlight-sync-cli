@@ -36,7 +36,7 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
   - `main.go` に `main` / `run` / `execute` / `report`、`root.go` に cobra の root と `PersistentPreRunE`（config.toml 読込）
   - `init.go`（`init --yes` は対話しない）/ `login.go` / `sync.go` が各サブコマンド、`prompt.go` が対話入力
   - `browser.go` の `openBrowser` は変数にしてあり、テストで差し替える
-- `cmd/brew-formula/` — Release の tag と checksums.txt から brew の Formula を標準出力に出す開発用コマンド。製品の CLI ではない（失敗は stderr 1 行 + exit 1）
+- `cmd/brew-formula/` — Release の tag と checksums.txt から brew の Formula を標準出力に出す開発用コマンド（`-current` で今の定義を渡すと更新するかを判定し、更新しないときは今の定義をそのまま出す）。製品の CLI ではない（失敗は stderr 1 行 + exit 1）
 - `internal/brewformula` — その Formula の本文の組み立て（`Render(tag, checksums)`）
 - `internal/config` — config.toml の読込（go-toml/v2、未知 key は拒否）と XDG パス解決。エラー文言に値を含めず path / key / 位置だけを書く
 - `internal/destination` — 同期先の抽象（§6.2）と Book の照合（§9）。Notion への書き込みの失敗は `exitcode.Notion`(4)、ローカル状態の不整合は `LocalState`(6)

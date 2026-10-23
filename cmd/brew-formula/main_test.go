@@ -54,3 +54,37 @@ func TestRun(t *testing.T) {
 		})
 	}
 }
+
+func TestRunCurrent(t *testing.T) {
+	amd := shaAMD64 + "  kindle-highlight-sync_v1.2.3_darwin_amd64.tar.gz\n"
+	arm := shaARM64 + "  kindle-highlight-sync_v1.2.3_darwin_arm64.tar.gz\n"
+	checksums := writeChecksums(t, arm+amd)
+	currentBody := []byte("class KindleHighlightSync < Formula\n  version \"1.2.3\"\n  # 手で編集した行  \nend")
+	currentPath := filepath.Join(t.TempDir(), "kindle-highlight-sync.rb")
+	if err := os.WriteFile(currentPath, currentBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("同じ版では今の定義がバイト単位でそのまま出て exit 0", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := run([]string{"-current", currentPath, "v1.2.3", checksums}, &stdout, &stderr)
+		if code != 0 {
+			t.Errorf("run() = %v, want 0 (stderr = %q)", code, stderr.String())
+		}
+		if !bytes.Equal(stdout.Bytes(), currentBody) {
+			t.Errorf("stdout = %q, want %q", stdout.String(), currentBody)
+		}
+	})
+
+	t.Run("-current のファイルが無いと標準出力が空で exit 1", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		missing := filepath.Join(t.TempDir(), "none.rb")
+		code := run([]string{"-current", missing, "v1.2.3", checksums}, &stdout, &stderr)
+		if code != 1 {
+			t.Errorf("run() = %v, want 1", code)
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout = %q, want 空", stdout.String())
+		}
+	})
+}
