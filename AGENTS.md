@@ -37,6 +37,7 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
   - `init.go`（`init --yes` は対話しない）/ `login.go` / `sync.go` が各サブコマンド、`prompt.go` が対話入力
   - `browser.go` の `openBrowser` は変数にしてあり、テストで差し替える
 - `internal/config` — config.toml の読込（go-toml/v2、未知 key は拒否）と XDG パス解決。エラー文言に値を含めず path / key / 位置だけを書く
+- `internal/destination` — 同期先の抽象（§6.2）と Book の照合（§9）。Notion への書き込みの失敗は `exitcode.Notion`(4)、ローカル状態の不整合は `LocalState`(6)
 - `internal/domain` — Book / Highlight の正準モデル。`NewBookID` は ASIN があればそのまま、無ければ §14 の正規化（NFC → 前後空白除去 → CRLF→LF → 水平空白の畳み込み）をした `v1` スキームの title + author の sha256 先頭 32 桁に `b1-` を付ける
 - `internal/exitcode` — `Kind`（1〜9）と `*Error`。0 成功 / 1 一般 / 2 Amazon 認証 / 3 設定 / 4 Notion / 5 ブラウザ / 6 ローカル状態 / 7 ソース形式 / 8 一部失敗 / 9 実行中。種類の無いエラーは General(1)。判定は `errors.As`
 - `internal/lock` — gofrs/flock による `run.lock` の非待機排他。競合は `exitcode.AlreadyRunning`(9)
@@ -48,6 +49,8 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
   - セレクタは定数にする。ページ取得は `fetchPage` / `fetchHighlightsPage` 型にしてテストで差し替える
   - 構造の異常は `newFormatError(what)` で `SourceFormat`(7) にする。`what` に HTML 由来の値を入れない
   - 認証状態は `AuthState`（Unknown / OK / Expired）。DOM が想定と違うときは Unknown にし、Expired と断定しない
+- `internal/state` — state.db（sqlite）に同期の状態を保存する StateStore（§6.3）。Initial Sync の判定（§47）は `sync_meta` の `initial_sync_completed_at` の有無だけで行う。エラーは `exitcode.LocalState`(6)
+- `internal/sync` — Source と Destination をつなぐ Sync Engine（§4）。skip か失敗が 1 件でもあれば `ApplyResult.PartialFailure` が `exitcode.PartialFailure`(8) を返す
 
 エラー処理と出力:
 
@@ -77,5 +80,5 @@ internal/source/browser_test.go, internal/source/auth_test.go, internal/source/t
 internal/notion, internal/domain
 setup（go mod download）と 1 パッケージ / 1 テストの実行コマンドは repo に明記が無く、Go の標準コマンドから導出した
 lint の入れ方: .devin/blueprint.yaml の initialize（golangci-lint@v2.14.0）から写した
-handler 内の t.Fatalf の禁止: Go の testing の制約（FailNow はテストの goroutine から呼ぶ）。Epic #8 で Codex の P1 として指摘された（PR #113 など）
+handler 内の t.Fatalf の禁止: Go の testing の制約（FailNow はテストの goroutine から呼ぶ）
 -->
