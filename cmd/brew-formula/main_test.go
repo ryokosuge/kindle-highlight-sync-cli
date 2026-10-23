@@ -60,31 +60,44 @@ func TestRunCurrent(t *testing.T) {
 	arm := shaARM64 + "  kindle-highlight-sync_v1.2.3_darwin_arm64.tar.gz\n"
 	checksums := writeChecksums(t, arm+amd)
 	currentBody := []byte("class KindleHighlightSync < Formula\n  version \"1.2.3\"\n  # 手で編集した行  \nend")
-	currentPath := filepath.Join(t.TempDir(), "kindle-highlight-sync.rb")
-	if err := os.WriteFile(currentPath, currentBody, 0o600); err != nil {
+	existing := filepath.Join(t.TempDir(), "kindle-highlight-sync.rb")
+	if err := os.WriteFile(existing, currentBody, 0o600); err != nil {
 		t.Fatal(err)
 	}
-
-	t.Run("同じ版では今の定義がバイト単位でそのまま出て exit 0", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		code := run([]string{"-current", currentPath, "v1.2.3", checksums}, &stdout, &stderr)
-		if code != 0 {
-			t.Errorf("run() = %v, want 0 (stderr = %q)", code, stderr.String())
-		}
-		if !bytes.Equal(stdout.Bytes(), currentBody) {
-			t.Errorf("stdout = %q, want %q", stdout.String(), currentBody)
-		}
-	})
-
-	t.Run("-current のファイルが無いと標準出力が空で exit 1", func(t *testing.T) {
-		var stdout, stderr bytes.Buffer
-		missing := filepath.Join(t.TempDir(), "none.rb")
-		code := run([]string{"-current", missing, "v1.2.3", checksums}, &stdout, &stderr)
-		if code != 1 {
-			t.Errorf("run() = %v, want 1", code)
-		}
-		if stdout.Len() != 0 {
-			t.Errorf("stdout = %q, want 空", stdout.String())
-		}
-	})
+	missing := filepath.Join(t.TempDir(), "none.rb")
+	tests := []struct {
+		name       string
+		current    string
+		wantCode   int
+		wantStdout []byte
+		wantStderr string
+	}{
+		{"同じ版では今の定義がバイト単位でそのまま出て exit 0", existing, 0, currentBody, ""},
+		{"-current のファイルが無いと標準出力が空で理由 1 行を出して exit 1", missing, 1, nil, "-current"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"-current", tt.current, "v1.2.3", checksums}, &stdout, &stderr)
+			if code != tt.wantCode {
+				t.Errorf("run() = %v, want %v (stderr = %q)", code, tt.wantCode, stderr.String())
+			}
+			if !bytes.Equal(stdout.Bytes(), tt.wantStdout) {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tt.wantStdout)
+			}
+			if tt.wantStderr == "" {
+				if stderr.Len() != 0 {
+					t.Errorf("stderr = %q, want 空", stderr.String())
+				}
+				return
+			}
+			lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
+			if len(lines) != 1 || lines[0] == "" {
+				t.Errorf("stderr = %q, want 空でない 1 行", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want %q を含む", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
 }
