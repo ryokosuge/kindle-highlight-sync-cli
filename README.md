@@ -17,7 +17,7 @@ Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取
 前提:
 
 - macOS と Homebrew（https://brew.sh/）
-- Google Chrome は brew では入らない。`login` と `sync` のために、利用者が別に入れる
+- Google Chrome は、この CLI の brew の定義では一緒に入らない。`login` と `sync` のために、利用者が別に入れる（公式サイトからでも、brew の cask の `google-chrome` でもよい）
 
 手順:
 
@@ -25,7 +25,7 @@ Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取
 2. `kindle-highlight-sync --help` を実行する。説明 1 行に続けて、Usage・Available Commands・Flags の help 全体が表示される。`echo $?` で `0` を確認する。
 3. 更新は `brew upgrade kindle-highlight-sync` で行う。
 
-以降の手順は、brew で入れたバイナリを `kindle-highlight-sync` として呼ぶ。
+以降の節の例は `./kindle-highlight-sync` と書いている。brew で入れた場合は `kindle-highlight-sync` と読み替える。
 
 ### ソースから build する場合
 
