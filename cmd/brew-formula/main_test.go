@@ -54,3 +54,50 @@ func TestRun(t *testing.T) {
 		})
 	}
 }
+
+func TestRunCurrent(t *testing.T) {
+	amd := shaAMD64 + "  kindle-highlight-sync_v1.2.3_darwin_amd64.tar.gz\n"
+	arm := shaARM64 + "  kindle-highlight-sync_v1.2.3_darwin_arm64.tar.gz\n"
+	checksums := writeChecksums(t, arm+amd)
+	currentBody := []byte("class KindleHighlightSync < Formula\n  version \"1.2.3\"\n  # 手で編集した行  \nend")
+	existing := filepath.Join(t.TempDir(), "kindle-highlight-sync.rb")
+	if err := os.WriteFile(existing, currentBody, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missing := filepath.Join(t.TempDir(), "none.rb")
+	tests := []struct {
+		name       string
+		current    string
+		wantCode   int
+		wantStdout []byte
+		wantStderr string
+	}{
+		{"同じ版では今の定義がバイト単位でそのまま出て exit 0", existing, 0, currentBody, ""},
+		{"-current のファイルが無いと標準出力が空で理由 1 行を出して exit 1", missing, 1, nil, "-current"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := run([]string{"-current", tt.current, "v1.2.3", checksums}, &stdout, &stderr)
+			if code != tt.wantCode {
+				t.Errorf("run() = %v, want %v (stderr = %q)", code, tt.wantCode, stderr.String())
+			}
+			if !bytes.Equal(stdout.Bytes(), tt.wantStdout) {
+				t.Errorf("stdout = %q, want %q", stdout.String(), tt.wantStdout)
+			}
+			if tt.wantStderr == "" {
+				if stderr.Len() != 0 {
+					t.Errorf("stderr = %q, want 空", stderr.String())
+				}
+				return
+			}
+			lines := strings.Split(strings.TrimSuffix(stderr.String(), "\n"), "\n")
+			if len(lines) != 1 || lines[0] == "" {
+				t.Errorf("stderr = %q, want 空でない 1 行", stderr.String())
+			}
+			if !strings.Contains(stderr.String(), tt.wantStderr) {
+				t.Errorf("stderr = %q, want %q を含む", stderr.String(), tt.wantStderr)
+			}
+		})
+	}
+}
