@@ -67,9 +67,8 @@ func headerHasFlowchart(header string) bool {
 	if !ok || !strings.HasPrefix(strings.TrimSpace(body), "flowchart") {
 		return false
 	}
-	return strings.Index(body, "Kindle Notebook") >= 0 &&
-		strings.Index(body, "Kindle Notebook") < strings.Index(body, cliName) &&
-		strings.Index(body, cliName) < strings.Index(body, "Notion")
+	source, cli, dest := strings.Index(body, "Kindle Notebook"), strings.Index(body, cliName), strings.Index(body, "Notion")
+	return source >= 0 && source < cli && cli < dest
 }
 
 // headerQuote は引用の塊 1 つについて、見本の形か（quoteOK）と、直後の段落があるか（hasNote）を持つ。
