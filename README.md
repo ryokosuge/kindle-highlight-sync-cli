@@ -1,8 +1,36 @@
 # kindle-highlight-sync
 
-Kindle の Highlight と Note を Notion Books Database に同期する CLI。
+Kindle の Highlight と Note を、Notion の Books Database に同期する macOS 用 CLI。
 
-Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取り出し、Notion の Books Database に同期する。
+[![CI](https://github.com/ryokosuge/kindle-highlight-sync-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/ryokosuge/kindle-highlight-sync-cli/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/ryokosuge/kindle-highlight-sync-cli)](https://github.com/ryokosuge/kindle-highlight-sync-cli/releases)
+
+Amazon.co.jp の Kindle Notebook から Book ごとの Highlight と Note を取り出し、Notion の Books Database に Book のページと Highlight のブロックとして入れる。
+
+```mermaid
+flowchart LR
+    A[Kindle Notebook] -->|取り出す| B[kindle-highlight-sync]
+    B -->|Book と Highlight を入れる| C[Notion Books Database]
+```
+
+図が描画されない環境では、Kindle Notebook から取り出した Book と Highlight が、Notion の Books Database に入る流れと読む。
+
+Books Database には Book ごとに 1 ページができる（値は架空）:
+
+| Title | Kindle ID | Author | ASIN | Last Annotated At |
+| --- | --- | --- | --- | --- |
+| 星降る図書館の地図 | B0EXAMPLE01 | 架空 太郎 | B0EXAMPLE01 | 2026-01-31 |
+
+各ページには Highlight が引用として並び、Note があれば引用の下に本文だけが入る（Note の無い Highlight と、ある Highlight の例）:
+
+> 夜の書庫では、本が自分の居場所を静かに覚えている。
+> Location 120 · khs:a-3c91e5d2
+
+> 地図の余白に書き込まれた線だけが、本当の道を指していた。
+> Location 482 · Page 37 · khs:a-8b02f7a1
+
+あとで読み返すとき、この余白の話から始める。
 
 動く環境:
 
