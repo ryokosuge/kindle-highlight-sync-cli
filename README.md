@@ -79,7 +79,7 @@ build したカレントディレクトリのバイナリは `./kindle-highlight
 
 ## init
 
-`./kindle-highlight-sync init` は、Notion token、Books Database、Data Source、Property の対応を順に確認し、`$XDG_CONFIG_HOME/kindle-highlight-sync/config.toml`（未設定時は `~/.config/kindle-highlight-sync/config.toml`）を作成する。token の用意は「Notion の準備」を参照する。うまくいくと `saved <config.toml のパス>` と `database_id:` などの設定内容が表示される。
+`./kindle-highlight-sync init` は、Notion token、Books Database、Data Source、Property の対応を順に確認し、`$XDG_CONFIG_HOME/kindle-highlight-sync/config.toml`（未設定時は `~/.config/kindle-highlight-sync/config.toml`）を作成する。token の用意は [docs/notion-setup.md](docs/notion-setup.md) を参照する。うまくいくと `saved <config.toml のパス>` と `database_id:` などの設定内容が表示される。
 
 `--database-id` で Database ID を指定できる。`--yes` は対話せず既定値だけで進めるため、token が見つからない場合、Data Source が複数ある場合、title または kindle_id の既定 Property がない場合は exit 3 になる。
 
@@ -132,12 +132,12 @@ stderr の文言で原因を見分ける。
   - Keychain に保存する。`./kindle-highlight-sync init --force` を実行して token を入力する。`config.toml` だけを作り直し、`browser-profile` と `state.db` は保持する。
   - 環境変数 `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` に token を設定して `sync` を実行する。
 - `config.toml` が壊れている。`./kindle-highlight-sync init --force` で作り直す。
-- `init` 時に integration が Books Database に接続されていない。stderr に日本語の接続手順が出る。「Notion の準備」の手順 3 のとおり接続してから、もう一度 `init` を実行する。
+- `init` 時に integration が Books Database に接続されていない。stderr に日本語の接続手順が出る。[docs/notion-setup.md](docs/notion-setup.md) の手順 3 のとおり接続してから、もう一度 `init` を実行する。
 - Initial Sync の確認が通っていない。端末でない入力（cron や launchd など）で動かしたときは stderr に `--yes` の案内が出る。端末で `y` 以外を答えたときも同じ exit 3 になる。内容を確かめて進めるなら、`./kindle-highlight-sync sync` を端末で動かして `y` を答えるか、`./kindle-highlight-sync sync --yes` を実行する。
 
 ### exit 4: Notion に繋がらない、または権限が足りない
 
-`sync` 中に Notion が認証・権限・対象なし（401 / 403 / 404）を返したときに止まる。原因は、token の失効、integration の Books Database への接続が外れた、権限不足、Database の ID 違いのどれか。確かめる場所は Notion の Books Database の「接続」の設定（「Notion の準備」の手順 3）で、integration が追加されているかを見る。
+`sync` 中に Notion が認証・権限・対象なし（401 / 403 / 404）を返したときに止まる。原因は、token の失効、integration の Books Database への接続が外れた、権限不足、Database の ID 違いのどれか。確かめる場所は Notion の Books Database の「接続」の設定（[docs/notion-setup.md](docs/notion-setup.md) の手順 3）で、integration が追加されているかを見る。
 
 次の手は `./kindle-highlight-sync init --force` で `config.toml` と token を作り直すこと。token を差し替えるときも `init --force` を使い、新しい token を入力する。環境変数 `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` を設定している間は、そちらが優先され Keychain には保存されない。環境変数の値が古くないかも確かめる。`init --yes` は token を保存しない。
 
