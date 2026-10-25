@@ -2,18 +2,25 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
 
-const readmePath = "../../README.md"
+const (
+	readmePath = "../../README.md"
+	docsGlob   = "../../docs/*.md"
+	cliName    = "kindle-highlight-sync"
+)
 
 var (
+	inlineCodeRe       = regexp.MustCompile("`[^`\n]+`")
 	readmeSubcommandRe = regexp.MustCompile("kindle-highlight-sync[ \t]+([a-z][a-z0-9_-]*)")
 	readmeFlagRe       = regexp.MustCompile(`--[a-z][a-z0-9_-]*`)
 )
@@ -51,14 +58,49 @@ func uniqueMatches(re *regexp.Regexp, text string, group int) []string {
 	return out
 }
 
-// undefinedInReadme は readme に出るサブコマンドとフラグのうち、定義に無いものを返す。
+// isCLICommandWord は、コードの先頭の語がこの CLI のコマンド（本体・サブコマンド）か、フラグそのものかを返す。
+func isCLICommandWord(word string, subcommands map[string]bool) bool {
+	return word == cliName || word == "./"+cliName || subcommands[word] || strings.HasPrefix(word, "-")
+}
+
+func isExternalCommand(code string, subcommands map[string]bool) bool {
+	fields := strings.Fields(code)
+	return len(fields) > 0 && !isCLICommandWord(fields[0], subcommands)
+}
+
+// stripExternalCommands は、先頭の語が CLI 以外のコマンドであるコードブロックの行とインラインコードを text から除く。
+func stripExternalCommands(text string, subcommands map[string]bool) string {
+	lines := strings.Split(text, "\n")
+	inFence := false
+	for i, line := range lines {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFence = !inFence
+			continue
+		}
+		if inFence {
+			if isExternalCommand(line, subcommands) {
+				lines[i] = ""
+			}
+			continue
+		}
+		lines[i] = inlineCodeRe.ReplaceAllStringFunc(line, func(span string) string {
+			if isExternalCommand(strings.Trim(span, "`"), subcommands) {
+				return ""
+			}
+			return span
+		})
+	}
+	return strings.Join(lines, "\n")
+}
+
+// undefinedInReadme は readme に出るサブコマンドとフラグのうち、定義に無いものを返す。外部コマンドのフラグは照合しない。
 func undefinedInReadme(readme string, subcommands, flags map[string]bool) (badSubcommands, badFlags []string) {
 	for _, s := range uniqueMatches(readmeSubcommandRe, readme, 1) {
 		if !subcommands[s] {
 			badSubcommands = append(badSubcommands, s)
 		}
 	}
-	for _, f := range uniqueMatches(readmeFlagRe, readme, 0) {
+	for _, f := range uniqueMatches(readmeFlagRe, stripExternalCommands(readme, subcommands), 0) {
 		if !flags[f] {
 			badFlags = append(badFlags, f)
 		}
@@ -86,6 +128,14 @@ func TestReadmeMatchesCLI(t *testing.T) {
 		{name: "数字入りのサブコマンドとフラグ", readme: "`kindle-highlight-sync sync2 --dry-run2`", wantSubcommand: []string{"sync2"}, wantFlag: []string{"--dry-run2"}},
 		{name: "アンダースコア入りのサブコマンドとフラグ", readme: "`kindle-highlight-sync sync_all --dry_run`", wantSubcommand: []string{"sync_all"}, wantFlag: []string{"--dry_run"}},
 		{name: "見出しの直後の語はサブコマンドと見なさない", readme: "# kindle-highlight-sync\n\nintroduction"},
+		{name: "docs 由来の存在しないサブコマンド", readme: "# コマンド\n\n```sh\nkindle-highlight-sync export\n```", wantSubcommand: []string{"export"}},
+		{name: "docs 由来の存在しないフラグ", readme: "```sh\nkindle-highlight-sync sync --verbose\n```", wantFlag: []string{"--verbose"}},
+		{name: "地の文に単独で書いた存在しないフラグ", readme: "`--verbose` を付けると詳細を出す。", wantFlag: []string{"--verbose"}},
+		{name: "地の文に単独で書いた存在するフラグ", readme: "`--dry-run` を付けると書き込まない。--yes も使える。"},
+		{name: "コードブロックの外部コマンドのフラグは照合しない", readme: "```sh\nbrew install --cask google-chrome\ngo build -o kindle-highlight-sync ./cmd/kindle-highlight-sync\n```"},
+		{name: "インラインコードの外部コマンドのフラグは照合しない", readme: "`brew install --cask google-chrome` で入れる。"},
+		{name: "外部コマンドの行と CLI のコマンドの行が並ぶと CLI 側だけ照合する", readme: "```sh\nbrew install --cask google-chrome\n./kindle-highlight-sync sync --verbose\n```", wantFlag: []string{"--verbose"}},
+		{name: "先頭語がサブコマンドだけのインラインコードは照合に残す", readme: "`init --bogus`", wantFlag: []string{"--bogus"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -99,17 +149,26 @@ func TestReadmeMatchesCLI(t *testing.T) {
 		})
 	}
 
-	t.Run("現行の README", func(t *testing.T) {
-		b, err := os.ReadFile(readmePath)
-		if err != nil {
-			t.Fatalf("ReadFile(%q) error = %v", readmePath, err)
-		}
-		gotSub, gotFlag := undefinedInReadme(string(b), subcommands, flags)
-		if len(gotSub) > 0 {
-			t.Errorf("%s の未定義のサブコマンド = %v, want []", readmePath, gotSub)
-		}
-		if len(gotFlag) > 0 {
-			t.Errorf("%s の未定義のフラグ = %v, want []", readmePath, gotFlag)
-		}
-	})
+	docs, err := filepath.Glob(docsGlob)
+	if err != nil {
+		t.Fatalf("Glob(%q) error = %v", docsGlob, err)
+	}
+	if len(docs) == 0 {
+		t.Fatalf("Glob(%q) = %v, want 1 件以上", docsGlob, docs)
+	}
+	for _, path := range append([]string{readmePath}, docs...) {
+		t.Run("現行の "+path, func(t *testing.T) {
+			b, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile(%q) error = %v", path, err)
+			}
+			gotSub, gotFlag := undefinedInReadme(string(b), subcommands, flags)
+			if len(gotSub) > 0 {
+				t.Errorf("%s の未定義のサブコマンド = %v, want []", path, gotSub)
+			}
+			if len(gotFlag) > 0 {
+				t.Errorf("%s の未定義のフラグ = %v, want []", path, gotFlag)
+			}
+		})
+	}
 }
