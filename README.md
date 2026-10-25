@@ -32,59 +32,44 @@ Books Database には Book ごとに 1 ページができる（値は架空）:
 
 あとで読み返すとき、この余白の話から始める。
 
-動く環境:
+## 前提
 
 - macOS（対象は macOS だけで、Linux / Windows は対象外。動作確認と配布をしない）
-- Google Chrome（`login` と `sync` の実行時に使う）
-- Notion integration（その token が要る）
+- Google Chrome（`login` と `sync` の実行時に使う。この CLI の brew の定義では一緒に入らないので、brew とは別に入れる。公式サイトからでも、brew の cask の `google-chrome` でもよい）
+- Notion integration（その token が要る。作り方は [docs/notion-setup.md](docs/notion-setup.md) を参照する）
+
+Homebrew（https://brew.sh/）で入れる。
 
 ライセンスは MIT。詳細は [LICENSE](LICENSE) を参照する。
 
-## インストール
+## Quick Start
 
-前提:
+```sh
+brew install ryokosuge/tap/kindle-highlight-sync
+kindle-highlight-sync login
+kindle-highlight-sync init
+kindle-highlight-sync sync
+```
 
-- macOS と Homebrew（https://brew.sh/）
-- Google Chrome は、この CLI の brew の定義では一緒に入らない。`login` と `sync` のために、利用者が別に入れる（公式サイトからでも、brew の cask の `google-chrome` でもよい）
+1. `brew install` は、tap の名前を含む完全修飾名で書く。
+2. `login` は画面付きの Chrome を開く。開いた Chrome で Amazon にログインする（MFA の入力も同じ画面で行う）。
+3. `init` は Notion token と Books Database を順に聞く。token は環境変数 `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` に設定しておくとそれを使い、設定が無ければ入力を求めて macOS Keychain に保存する（`config.toml` には token を書かない）。integration と Books Database の準備は [docs/notion-setup.md](docs/notion-setup.md) を参照する。
+4. 最初の `sync` は Initial Sync で、作る Book と既存ページに結び付ける Book の件数を示して `Continue? [y/N]` と聞く。内容を確かめて `y` と答える（`y` 以外は exit 3 になる）。
 
-手順:
+更新は `brew upgrade kindle-highlight-sync` で行う。
 
-1. `brew install ryokosuge/tap/kindle-highlight-sync` を実行する。tap の名前を含む完全修飾名で書く。
-2. `kindle-highlight-sync --help` を実行する。説明 1 行に続けて、Usage・Available Commands・Flags の help 全体が表示される。`echo $?` で `0` を確認する。
-3. 更新は `brew upgrade kindle-highlight-sync` で行う。
+## Notion の準備
 
-以降の節の例は `./kindle-highlight-sync` と書いている。brew で入れた場合は `kindle-highlight-sync` と読み替える。
+integration を作って token を取り、Books Database に Property を用意して integration を接続する。手順と Property の表は [docs/notion-setup.md](docs/notion-setup.md) を参照する。
 
-### ソースから build する場合
+## ソースから build する場合
 
 1. Go 1.27 以上を用意する。https://go.dev/dl/ の macOS 向けインストーラ、または `brew install go` でインストールできる。`go version` で確認する。
 2. `git clone https://github.com/ryokosuge/kindle-highlight-sync-cli.git` を実行し、`cd kindle-highlight-sync-cli` でディレクトリに移動する。
 3. `go build ./cmd/kindle-highlight-sync` でバイナリを build する。
 4. `./kindle-highlight-sync --help` を実行する。説明 1 行に続けて、Usage・Available Commands・Flags の help 全体が表示される。`echo $?` で `0` を確認する。
 
-build したカレントディレクトリのバイナリは `./kindle-highlight-sync` として呼ぶ。
-
-## Notion の準備
-
-`init` の前に、Notion 側で次の 3 つを用意する。`init` も最初の問いの前に同じ内容を案内する。
-
-1. integration を作って token を取る。workspace の owner が integration を作り、token を取得する。作り方は公式の https://developers.notion.com/docs/authorization を参照する。
-2. Books Database に次の Property を用意する（Notion の型名はそのまま書く）。
-
-   | Property | 型 | 必須 | 内容 |
-   |---|---|---|---|
-   | （名前は任意） | title | 必須 | Book のタイトル |
-   | Kindle ID | rich_text | 必須 | Book ID（ASIN、取れなければ `b1-` で始まる代替値）。同期先のページを見分けるのに使う |
-   | Author | rich_text | 任意 | Book の著者 |
-   | ASIN | rich_text | 任意 | Book の ASIN |
-   | Last Annotated At | date | 任意 | Kindle Notebook で最後に Highlight や Note を付けた日時 |
-
-3. 作った integration を Books Database に接続する。Notion で Books Database のページを開き、右上の「…」メニューから「接続」（英語表示では Connections / Add connections）で integration を追加する。接続していないと Database を読めない。
-
-token の渡し方は 2 通りで、`config.toml` には token を書かない。
-
-- 環境変数 `KINDLE_HIGHLIGHT_SYNC_NOTION_TOKEN` に token を設定する。設定されていればその実行だけで使う。
-- 環境変数を設定しない場合は、`init` が入力を求め、入力した token を macOS Keychain の service `kindle-highlight-sync`、account `notion-token` に保存する。
+build したカレントディレクトリのバイナリは `./kindle-highlight-sync` として呼ぶ。以降の節の例も `./kindle-highlight-sync` と書いている。brew で入れた場合は `kindle-highlight-sync` と読み替える。
 
 ## login
 
