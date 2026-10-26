@@ -28,7 +28,15 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
 - `golangci-lint run`（CI は v2.14。`.golangci.yml` は `version: "2"` / `linters.default: standard`）
 - 手元に無ければ `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0` で入れる（`.devin/blueprint.yaml` と同じ版）。入れたあと `$(go env GOPATH)/bin` が PATH に入っていることを確かめる。入れられない環境では、lint を確かめられなかったことを PR 本文に書く
 
+## Verify
+
+- PR を出す前に通す（CI と同じ判定）: `TODO（lint / test / build を 1 コマンドに束ねる。候補: go build ./cmd/kindle-highlight-sync && go test ./... && golangci-lint run）`
+- それまでは上の 3 コマンドを順に走らせ、全部 exit 0 であることを確かめる（CI は `go test ./...` と `golangci-lint run` の 2 job）
+- 環境の疎通（doctor 相当の 1 コマンドは無い）: `go version`（1.27 以上）/ `go mod download` / `golangci-lint --version`（v2.14）
+
 ## Conventions
+
+このファイルや README と既存コードの書き方が食い違うときは既存コードに従い、動いているコードをドキュメントに合わせて書き換えず、見つけた食い違いを PR 本文に列挙する。
 
 ディレクトリ:
 
@@ -36,6 +44,8 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
   - `main.go` に `main` / `run` / `execute` / `report`、`root.go` に cobra の root と `PersistentPreRunE`（config.toml 読込）
   - `init.go`（`init --yes` は対話しない）/ `login.go` / `sync.go` が各サブコマンド、`prompt.go` が対話入力
   - `browser.go` の `openBrowser` は変数にしてあり、テストで差し替える
+  - `init_guide.go`（init の最初の問いの前に出す Books Database の準備物の案内）/ `init_connect.go`（integration 未接続のときの案内と exit 3 のエラー）
+  - `confirm.go`（§47 の Initial Sync の確認）/ `destination.go`（config.toml の `[notion]` と token から同期先を組み立てる）/ `state.go`（state.db を開く `newStateStore`。テストで差し替える）/ `plan_output.go`（§64 の Plan と実行結果の件数を stdout に書く。stdout は redact を通さないので本文や token を書かない）
 - `cmd/brew-formula/` — Release の tag と checksums.txt から brew の Formula を標準出力に出す開発用コマンド（`-current` で今の定義を渡すと更新するかを判定し、更新しないときは今の定義をそのまま出す）。製品の CLI ではない（失敗は stderr 1 行 + exit 1）
 - `internal/brewformula` — その Formula の本文の組み立て（`Render(tag, checksums)`）
 - `internal/config` — config.toml の読込（go-toml/v2、未知 key は拒否）と XDG パス解決。エラー文言に値を含めず path / key / 位置だけを書く
@@ -44,6 +54,9 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
 - `internal/exitcode` — `Kind`（1〜9）と `*Error`。0 成功 / 1 一般 / 2 Amazon 認証 / 3 設定 / 4 Notion / 5 ブラウザ / 6 ローカル状態 / 7 ソース形式 / 8 一部失敗 / 9 実行中。種類の無いエラーは General(1)。判定は `errors.As`
 - `internal/lock` — gofrs/flock による `run.lock` の非待機排他。競合は `exitcode.AlreadyRunning`(9)
 - `internal/notion` — Notion API client。`New(token, opts...)` と `WithBaseURL`。retry は最大 5 回の指数バックオフ。`ParseDatabaseID` は URL / 32 桁 hex / UUID から ID を取る。エラーは `exitcode.Notion`(4)
+  - `database.go`（Retrieve a database）/ `query.go`（Query a data source）/ `pages.go`（Property の書き込み値）/ `blocks.go`（Retrieve block children）/ `block_append.go`（Append block children。children の上限で分けるのは呼び出し側）
+  - `mapping.go` / `mapping_check.go` — Data Source の Property と §45 の項目の対応と、その不足・型違いの検査
+  - `access.go`（`IsNotShared`: integration 未接続の可能性）/ `outcome.go`（`OutcomeUnknown`: 反映されたか分からない失敗）
 - `internal/redact` — stderr に出す前に secret / Authorization / Cookie / Notion token を `[REDACTED]` に置換する
 - `internal/secrets` — Notion token を環境変数 → Keychain の順で探す。保存は `SaveNotionToken`。エラー文言に token を含めない
 - `internal/source` — chromedp で Chrome を起動し（`Open` / `Close`）、Kindle Notebook を開いて goquery で解析する
@@ -83,4 +96,7 @@ internal/notion, internal/domain
 setup（go mod download）と 1 パッケージ / 1 テストの実行コマンドは repo に明記が無く、Go の標準コマンドから導出した
 lint の入れ方: .devin/blueprint.yaml の initialize（golangci-lint@v2.14.0）から写した
 handler 内の t.Fatalf の禁止: Go の testing の制約（FailNow はテストの goroutine から呼ぶ）
+/readiness で追記: Verify 節（.github/workflows/ci.yml の test / lint job。prove 相当の 1 コマンドは Makefile / scripts に無い）、
+Conventions のコード優先の行、cmd/kindle-highlight-sync/{confirm,destination,init_connect,init_guide,plan_output,state}.go と
+internal/notion/{database,query,pages,blocks,block_append,mapping,mapping_check,access,outcome}.go の説明（各ファイルの冒頭コメントから写した）
 -->
