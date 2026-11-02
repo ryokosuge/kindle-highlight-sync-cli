@@ -87,6 +87,10 @@ Kindle の Highlight と Note を Notion Books Database に同期する Go 製 C
 
 コメントは日本語、公開識別子は英語。仕様書の節は `§<番号>` で参照する。
 
+## Code Review Rules
+
+レビューで見つけるべき判断の規約を書く（実装の作法は Conventions へ、機械的に検査できるものは lint / CI へ）。
+
 <!--
 根拠: go.mod, .github/workflows/ci.yml, .golangci.yml, README.md, .gitignore,
 cmd/kindle-highlight-sync/{main,root,init,login,sync,browser,prompt}.go と *_test.go,
@@ -99,4 +103,5 @@ handler 内の t.Fatalf の禁止: Go の testing の制約（FailNow はテス�
 /readiness で追記: Verify 節（.github/workflows/ci.yml の test / lint job。prove 相当の 1 コマンドは Makefile / scripts に無い）、
 Conventions のコード優先の行、cmd/kindle-highlight-sync/{confirm,destination,init_connect,init_guide,plan_output,state}.go と
 internal/notion/{database,query,pages,blocks,block_append,mapping,mapping_check,access,outcome}.go の説明（各ファイルの冒頭コメントから写した）
+/readiness（2026-11-02）で追記: gate reviewer（Codex）が読む `## Code Review Rules` 節の見出し（中身は儀式が起票する Task で育てる）。Verify 節の prove は Makefile / scripts に 1 コマンドが無いため TODO のまま
 -->
